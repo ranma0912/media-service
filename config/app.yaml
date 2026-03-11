@@ -1,0 +1,233 @@
+# MediaService 主配置文件
+# 所有路径均使用相对路径，确保绿色部署
+
+app:
+  name: "MediaService"
+  version: "1.6.0"
+  debug: false
+
+  # 目录配置（相对于应用根目录）
+  paths:
+    data: "./data"
+    logs: "./logs"
+    temp: "./data/temp"
+    cache: "./data/cache"
+    db: "./data/db"
+    backups: "./data/backups"
+
+  # 运行时文件
+  runtime:
+    pid_file: "./data/app.pid"
+    lock_file: "./data/app.lock"
+
+# 服务器配置
+server:
+  host: "127.0.0.1"
+  port: 8000
+  workers: 1  # 绿色部署使用单进程
+  reload: false
+
+# 数据库配置（SQLite，本地文件）
+database:
+  url: "sqlite:///./data/db/media_service.db"
+  echo: false
+  pool_size: 5
+
+# 日志配置
+logging:
+  level: "INFO"
+  format: "{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name} | {message}"
+  rotation: "10 MB"
+  retention: "30 days"
+  files:
+    app: "./logs/app.log"
+    error: "./logs/error.log"
+    access: "./logs/access.log"
+
+# 扫描配置
+scanner:
+  watch_paths:
+    - "D:/Downloads"  # 用户可修改为实际路径
+  recursive: true
+  interval: 300  # 秒
+
+  # 监控配置
+  monitoring:
+    enabled: true
+    recursive: true
+    debounce_seconds: 5
+    ignore_patterns:
+      - "*.tmp"
+      - "*.part"
+      - ".*"
+
+  # 定时扫描配置
+  scheduled:
+    enabled: true
+    fallback:
+      enabled: true
+      interval: 3600  # 每小时
+    deep_scan:
+      enabled: true
+      cron: "0 3 * * 0"  # 每周日凌晨3点
+
+# 识别配置
+recognition:
+  # 识别操作模式：auto / manual
+  mode: "manual"
+
+  # 自动模式配置
+  auto:
+    delay_after_scan: 30
+    auto_ai_recognition: false
+    low_confidence_threshold: 0.7
+    auto_organize: false
+
+  # 手动模式配置
+  manual:
+    notify_after_scan: true
+    default_select: "unrecognized"
+    batch_max_files: 50
+
+  # 数据源配置
+  sources:
+    tmdb:
+      enabled: true
+      api_key: ""  # 请在此处填入 TMDB API Key
+      language: "zh-CN"
+      cache_enabled: true
+      cache_ttl: 86400  # 24小时
+
+# 整理配置
+organize:
+  # 整理操作模式：auto / manual
+  mode: "manual"
+
+  # 自动模式配置
+  auto:
+    auto_organize_after_recognition: false
+    confirm_before_organize: false
+    conflict_strategy: "rename_new"
+
+  # 手动模式配置
+  manual:
+    show_preview: true
+    default_select: "recognized"
+    batch_max_files: 20
+    require_confirm: true
+
+  # 默认动作类型
+  action_type: "move"  # move / rename / hardlink / copy
+
+  # 冲突处理策略
+  conflict_strategy: "rename_new"  # skip / overwrite / backup / rename_new / merge
+
+# 媒体服务器集成（可选）
+media_server:
+  enabled: false
+  servers:
+    - name: "jellyfin-main"
+      type: "jellyfin"
+      url: "http://localhost:8096"
+      api_key: ""  # 请在此处填入 Jellyfin API Key
+      libraries:
+        - "电影"
+        - "剧集"
+        - "动漫"
+
+# 通知配置
+notification:
+  enabled: false
+  channels:
+    wechat:
+      enabled: false
+      webhook_url: ""
+    email:
+      enabled: false
+      smtp_host: ""
+      smtp_port: 587
+      smtp_user: ""
+      smtp_password: ""
+      from_address: ""
+      to_addresses: []
+
+# AI识别配置（可选）
+ai_recognition:
+  enabled: false
+  daily_budget: 10.0
+  max_tokens: 2000
+  providers:
+    - name: "openai"
+      priority: 1
+      model: "gpt-4o"
+      api_key: ""
+      api_endpoint: "https://api.openai.com/v1"
+    - name: "kimi"
+      priority: 2
+      model: "moonshot-v1-8k"
+      api_key: ""
+      api_endpoint: "https://api.moonshot.cn/v1"
+
+# 下载器配置（可选）
+downloader:
+  enabled: false
+  type: "qbittorrent"  # qbittorrent / transmission
+  connection:
+    host: "localhost"
+    port: 8080
+    username: "admin"
+    password: ""
+  save_path: "D:/Downloads"
+  speed_limit:
+    download: 0  # 0 表示不限制
+    upload: 0
+
+# 安全配置
+security:
+  # 密码策略
+  password_policy:
+    min_length: 8
+    require_uppercase: true
+    require_lowercase: true
+    require_numbers: true
+    require_special: false
+    max_age_days: 90
+    prevent_reuse: 5
+
+  # 会话配置
+  session:
+    max_concurrent: 3
+    idle_timeout: 1800  # 30分钟
+
+  # JWT配置
+  jwt:
+    secret: ""  # 自动生成，无需手动设置
+    algorithm: "HS256"
+    access_token_expire: 3600  # 1小时
+    refresh_token_expire: 604800  # 7天
+
+# 备份配置
+backup:
+  enabled: true
+  backup_path: "./data/backups"
+  auto_backup:
+    database:
+      enabled: true
+      cron: "0 3 * * *"  # 每天凌晨3点
+      retention_days: 30
+    config:
+      enabled: true
+      on_change: true
+      retention_count: 50
+    full:
+      enabled: true
+      cron: "0 4 1 * *"  # 每月1号凌晨4点
+      retention_months: 6
+  encryption:
+    enabled: true
+    algorithm: "AES-256-GCM"
+    key_file: "./secrets/backup-key.pem"
+  compression:
+    enabled: true
+    format: "gzip"
+    level: 6

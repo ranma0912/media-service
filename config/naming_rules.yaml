@@ -1,0 +1,52 @@
+# 命名规则配置
+# 使用 Jinja2 3.1.x 模板语法
+
+naming_rules:
+  movie:
+    default: "{{ title }} ({{ year }}) [{{ quality }}-{{ source }}-{{ codec }}]"
+    alternatives:
+      - "{{ title }} ({{ year }})"
+      - "{{ title }} ({{ year }}) [{{ quality }}]"
+      - "{{ original_title }} ({{ year }})"
+      # 按语言/地区分类的命名规则
+      - "{{ title }}.{{ country }} ({{ year }}) [{{ quality }}]"
+      - "{{ title }}.{{ audio_language }} ({{ year }})"
+      - "{{ original_title }}.{{ country }} ({{ year }}) [{{ quality }}]"
+      # 使用过滤器
+      - "{{ title | replace(' ', '.') }}.({{ year }})"
+      - "{{ title | lower }}.({{ year }})"
+
+  tv:
+    default: "{{ title }} - S{{ '%02d' | format(season) }}E{{ '%02d' | format(episode) }}"
+    alternatives:
+      - "{{ title }} - S{{ '%02d' | format(season) }}E{{ '%02d' | format(episode) }} - {{ episode_title }}"
+      - "{{ title }} - {{ season }}x{{ '%02d' | format(episode) }}"
+      - "{{ title }}.{{ country }} - S{{ '%02d' | format(season) }}E{{ '%02d' | format(episode) }}"
+
+  anime:
+    default: "[{{ release_group }}] {{ title }} - {{ '%02d' | format(episode) }} [{{ quality }}]"
+    alternatives:
+      - "[{{ release_group }}] {{ title }}.{{ country }} - {{ '%02d' | format(episode) }} [{{ quality }}]"
+
+# 目录结构规则
+directory_rules:
+  movie: "/media/电影/{{ title }} ({{ year }})"
+  tv: "/media/剧集/{{ title }}/Season {{ '%02d' | format(season) }}"
+  anime: "/media/动漫/{{ title }}"
+  undefined: "/media/未识别/{{ sub_category }}/{{ file_name }}"
+
+  # 按国家/地区分类的目录规则
+  movie_by_country: "/media/电影/{{ country_name }}/{{ title }} ({{ year }})"
+  tv_by_region: "/media/剧集/{{ region }}/{{ title }}/Season {{ '%02d' | format(season) }}"
+
+  # 按二级分类的目录规则
+  movie_by_genre: "/media/电影/{{ sub_category }}/{{ title }} ({{ year }})"
+  tv_by_genre: "/media/剧集/{{ sub_category }}/{{ title }}/Season {{ '%02d' | format(season) }}"
+  anime_by_genre: "/media/动漫/{{ sub_category }}/{{ title }}"
+
+# 字幕文件命名规则
+subtitle_naming:
+  pattern: "{{ media_name }}.{{ language }}{{ ext }}"
+  # {{ media_name }} = 整理后的媒体文件名（不含扩展名）
+  # {{ language }} = 语言代码 (zh, en, ja等)
+  # {{ ext }} = 字幕扩展名 (.srt, .ass等)
