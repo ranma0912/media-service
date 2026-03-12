@@ -150,48 +150,29 @@ const handleReset = () => {
 const loadData = async () => {
   loading.value = true
   try {
-    // TODO: 调用实际API
-    // const res = await request.get('/api/media/files', {
-    //   params: { ...searchForm, ...pagination }
-    // })
-    // tableData.value = res.data.list
-    // pagination.total = res.data.total
+    // 调用实际API
+    const { getMediaFiles } = await import('@/api/media')
+    const res = await getMediaFiles({
+      page: pagination.page,
+      page_size: pagination.size,
+      media_type: searchForm.mediaType,
+      search: searchForm.keyword
+    })
 
-    // 模拟数据
-    tableData.value = [
-      {
-        id: 1,
-        fileName: 'The.Matrix.1999.1080p.BluRay.x264-SPARKS.mkv',
-        title: '黑客帝国',
-        mediaType: 'movie',
-        year: 1999,
-        fileSize: 2147483648,
-        status: 'recognized',
-        createdAt: '2024-01-15 10:30:00'
-      },
-      {
-        id: 2,
-        fileName: 'Breaking.Bad.S01E01.1080p.BluRay.x264-SPARKS.mkv',
-        title: '绝命毒师',
-        mediaType: 'tv',
-        year: 2008,
-        fileSize: 1073741824,
-        status: 'recognized',
-        createdAt: '2024-01-15 10:35:00'
-      },
-      {
-        id: 3,
-        fileName: 'Unknown.File.2024.1080p.mkv',
-        title: '',
-        mediaType: 'undefined',
-        year: 0,
-        fileSize: 536870912,
-        status: 'unrecognized',
-        createdAt: '2024-01-15 11:00:00'
-      }
-    ]
-    pagination.total = 3
+    // 转换数据格式以匹配前端需求
+    tableData.value = res.items.map(item => ({
+      id: item.id,
+      fileName: item.file_name,
+      title: item.title || '',
+      mediaType: item.media_type || 'undefined',
+      year: item.year || 0,
+      fileSize: item.file_size || 0,
+      status: item.status || 'unrecognized',
+      createdAt: item.scanned_at || ''
+    }))
+    pagination.total = res.total
   } catch (error) {
+    console.error('加载数据失败:', error)
     ElMessage.error('加载数据失败')
   } finally {
     loading.value = false
@@ -219,15 +200,25 @@ const handleRecognize = (row) => {
 }
 
 // 删除
-const handleDelete = (row) => {
-  ElMessageBox.confirm('确定要删除这条记录吗？', '提示', {
-    confirmButtonText: '确定',
-    cancelButtonText: '取消',
-    type: 'warning'
-  }).then(() => {
+const handleDelete = async (row) => {
+  try {
+    await ElMessageBox.confirm('确定要删除这条记录吗？', '提示', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning'
+    })
+
+    // 调用实际API
+    const { deleteMediaFile } = await import('@/api/media')
+    await deleteMediaFile(row.id)
     ElMessage.success('删除成功')
     loadData()
-  }).catch(() => {})
+  } catch (error) {
+    if (error !== 'cancel') {
+      console.error('删除失败:', error)
+      ElMessage.error('删除失败')
+    }
+  }
 }
 
 // 初始化

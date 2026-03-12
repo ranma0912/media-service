@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Optional, List
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from loguru import logger
 
 from app.db import get_db
@@ -126,11 +127,11 @@ async def get_media_stats(
         # 按类型统计
         type_stats = db.query(
             MediaFile.media_type,
-            db.func.count(MediaFile.id)
+            func.count(MediaFile.id)
         ).group_by(MediaFile.media_type).all()
 
         # 总大小
-        total_size = db.query(db.func.sum(MediaFile.file_size)).scalar() or 0
+        total_size = db.query(func.sum(MediaFile.file_size)).scalar() or 0
 
         return {
             "total_files": total_files,

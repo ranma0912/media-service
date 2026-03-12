@@ -10,7 +10,7 @@ from datetime import datetime
 from loguru import logger
 
 from app.db.models import MediaFile, RecognitionResult, KeywordLibrary, KeywordRule, KeywordMapping, SeasonEpisodeRule
-from app.db.session import get_db
+from app.db import get_db_context
 from app.modules.fetcher import TMDBFetcher
 from app.core.config import config_manager
 
@@ -47,7 +47,7 @@ class MediaRecognizer:
         Returns:
             识别结果列表
         """
-        with get_db() as db:
+        with get_db_context() as db:
             media_file = db.query(MediaFile).filter_by(id=media_file_id).first()
             if not media_file:
                 logger.error(f"媒体文件不存在: {media_file_id}")
@@ -142,7 +142,7 @@ class MediaRecognizer:
         """
         processed_name = name
 
-        with get_db() as db:
+        with get_db_context() as db:
             # 获取所有启用的规则
             rules = db.query(KeywordRule).join(KeywordLibrary).filter(
                 KeywordRule.is_enabled == True,
@@ -198,7 +198,7 @@ class MediaRecognizer:
         Returns:
             (季数, 集数)
         """
-        with get_db() as db:
+        with get_db_context() as db:
             rules = db.query(SeasonEpisodeRule).filter(
                 SeasonEpisodeRule.is_enabled == True
             ).order_by(SeasonEpisodeRule.priority.desc()).all()
@@ -300,7 +300,7 @@ class MediaRecognizer:
         Returns:
             手动映射记录
         """
-        with get_db() as db:
+        with get_db_context() as db:
             # 精确匹配
             mapping = db.query(KeywordMapping).filter(
                 KeywordMapping.source_pattern == filename,

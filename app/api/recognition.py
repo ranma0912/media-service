@@ -13,7 +13,7 @@ from app.db.models import RecognitionResult, MediaFile
 from app.db.session import get_db
 
 
-router = APIRouter(prefix="/api/recognition", tags=["识别管理"])
+router = APIRouter(tags=["识别管理"])
 
 
 class RecognitionRequest(BaseModel):
@@ -114,7 +114,10 @@ async def batch_recognize(
 
 
 @router.post("/manual")
-async def manual_recognize(request: ManualRecognitionRequest):
+async def manual_recognize(
+    request: ManualRecognitionRequest,
+    db: Session = Depends(get_db)
+):
     """
     手动指定TMDB ID识别
 
@@ -125,72 +128,71 @@ async def manual_recognize(request: ManualRecognitionRequest):
     - **episode_number**: 集数（电视剧）
     """
     try:
-        with get_db() as db:
-            media_file = db.query(MediaFile).filter_by(id=request.file_id).first()
-            if not media_file:
-                raise HTTPException(status_code=404, detail="媒体文件不存在")
+        media_file = db.query(MediaFile).filter_by(id=request.file_id).first()
+        if not media_file:
+            raise HTTPException(status_code=404, detail="媒体文件不存在")
 
-            # 获取TMDB数据
-            async with TMDBFetcher() as fetcher:
-                if request.media_type == 'movie':
-                    tmdb_data = await fetcher.get_movie_details(request.tmdb_id)
-                else:
-                    tmdb_data = await fetcher.get_tv_details(request.tmdb_id)
+        # 获取TMDB数据
+        async with TMDBFetcher() as fetcher:
+            if request.media_type == 'movie':
+                tmdb_data = await fetcher.get_movie_details(request.tmdb_id)
+            else:
+                tmdb_data = await fetcher.get_tv_details(request.tmdb_id)
 
-                    # 如果指定了季集，获取季集详情
-                    if request.season_number and request.episode_number:
-                        episode_data = await fetcher.get_tv_episode_details(
-                            request.tmdb_id,
-                            request.season_number,
-                            request.episode_number
-                        )
-                        tmdb_data['episode_title'] = episode_data.get('name')
-                        tmdb_data['season_number'] = request.season_number
-                        tmdb_data['episode_number'] = request.episode_number
+                # 如果指定了季集，获取季集详情
+                if request.season_number and request.episode_number:
+                    episode_data = await fetcher.get_tv_episode_details(
+                        request.tmdb_id,
+                        request.season_number,
+                        request.episode_number
+                    )
+                    tmdb_data['episode_title'] = episode_data.get('name')
+                    tmdb_data['season_number'] = request.season_number
+                    tmdb_data['episode_number'] = request.episode_number
 
-            # 格式化识别结果
-            result_data = fetcher.format_recognition_result(
-                tmdb_data,
-                request.media_type,
-                confidence=1.0  # 手动指定置信度为1.0
-            )
+        # 格式化识别结果
+        result_data = fetcher.format_recognition_result(
+            tmdb_data,
+            request.media_type,
+            confidence=1.0  # 手动指定置信度为1.0
+        )
 
-            # 更新季集信息
-            if request.season_number:
-                result_data['season_number'] = request.season_number
-            if request.episode_number:
-                result_data['episode_number'] = request.episode_number
+        # 更新季集信息
+        if request.season_number:
+            result_data['season_number'] = request.season_number
+        if request.episode_number:
+            result_data['episode_number'] = request.episode_number
 
-            # 清除旧的识别结果
-            db.query(RecognitionResult).filter_by(
-                media_file_id=request.file_id
-            ).delete()
+        # 清除旧的识别结果
+        db.query(RecognitionResult).filter_by(
+            media_file_id=request.file_id
+        ).delete()
 
-            # 创建新的识别结果
-            recognition = RecognitionResult(
-                media_file_id=request.file_id,
-                is_manual=True,
-                is_selected=True,
-                **result_data
-            )
+        # 创建新的识别结果
+        recognition = RecognitionResult(
+            media_file_id=request.file_id,
+            is_manual=True,
+            is_selected=True,
+            **result_data
+        )
 
-            db.add(recognition)
-            db.commit()
+        db.add(recognition)
+        db.commit()
 
-            logger.info(f"手动识别完成: {media_file.file_name}, TMDB ID: {request.tmdb_id}")
+        logger.info(f"手动识别完成: {media_file.file_name}, TMDB ID: {request.tmdb_id}")
 
-            return {
-                "file_id": request.file_id,
-                "status": "success",
-                "result": {
-                    "id": recognition.id,
-                    "title": recognition.title,
-                    "year": recognition.year,
-                    "season": recognition.season_number,
-                    "episode": recognition.episode_number,
-                    "confidence": recognition.confidence
-                }
+        return {
+            "file_id": request.file_id,
+            "status": "success",
+            "result": {
+                "id": recognition.id,
+                "title": recognition.title,
+                "year": recognition.year,
+                "season": recognition.season_number,
+                "episode": recognition.episode_number,
+                "confidence": recognition.confidence
             }
+        }
 
     except Exception as e:
         logger.error(f"手动识别失败: {e}")
@@ -198,76 +200,80 @@ async def manual_recognize(request: ManualRecognitionRequest):
 
 
 @router.get("/results/{file_id}")
-async def get_recognition_results(file_id: int):
+async def get_recognition_results(
+    file_id: int,
+    db: Session = Depends(get_db)
+):
     """
     获取文件的识别结果
 
     - **file_id**: 媒体文件ID
     """
-    with get_db() as db:
-        results = db.query(RecognitionResult).filter_by(
-            media_file_id=file_id
-        ).order_by(RecognitionResult.confidence.desc()).all()
+    results = db.query(RecognitionResult).filter_by(
+        media_file_id=file_id
+    ).order_by(RecognitionResult.confidence.desc()).all()
 
-        return [
-            {
-                "id": r.id,
-                "source": r.source,
-                "source_id": r.source_id,
-                "media_type": r.media_type,
-                "title": r.title,
-                "original_title": r.original_title,
-                "year": r.year,
-                "season_number": r.season_number,
-                "episode_number": r.episode_number,
-                "episode_title": r.episode_title,
-                "overview": r.overview,
-                "poster_url": r.poster_url,
-                "backdrop_url": r.backdrop_url,
-                "genres": r.genres,
-                "directors": r.directors,
-                "actors": r.actors,
-                "rating": r.rating,
-                "confidence": r.confidence,
-                "is_manual": r.is_manual,
-                "is_selected": r.is_selected,
-                "recognized_at": r.recognized_at.isoformat() if r.recognized_at else None
-            }
-            for r in results
-        ]
+    return [
+        {
+            "id": r.id,
+            "source": r.source,
+            "source_id": r.source_id,
+            "media_type": r.media_type,
+            "title": r.title,
+            "original_title": r.original_title,
+            "year": r.year,
+            "season_number": r.season_number,
+            "episode_number": r.episode_number,
+            "episode_title": r.episode_title,
+            "overview": r.overview,
+            "poster_url": r.poster_url,
+            "backdrop_url": r.backdrop_url,
+            "genres": r.genres,
+            "directors": r.directors,
+            "actors": r.actors,
+            "rating": r.rating,
+            "confidence": r.confidence,
+            "is_manual": r.is_manual,
+            "is_selected": r.is_selected,
+            "recognized_at": r.recognized_at.isoformat() if r.recognized_at else None
+        }
+        for r in results
+    ]
 
 
 @router.put("/select/{result_id}")
-async def select_recognition_result(result_id: int):
+async def select_recognition_result(
+    result_id: int,
+    db: Session = Depends(get_db)
+):
     """
     选择识别结果
 
     - **result_id**: 识别结果ID
     """
     try:
-        with get_db() as db:
-            result = db.query(RecognitionResult).filter_by(id=result_id).first()
+        result = db.query(RecognitionResult).filter_by(id=result_id).first()
 
-            if not result:
-                raise HTTPException(status_code=404, detail="识别结果不存在")
+        if not result:
+            raise HTTPException(status_code=404, detail="识别结果不存在")
 
-            # 取消同一文件的其他选择
-            db.query(RecognitionResult).filter(
-                RecognitionResult.media_file_id == result.media_file_id,
-                RecognitionResult.id != result_id
-            ).update({"is_selected": False})
+        # 取消同一文件的其他选择
+        db.query(RecognitionResult).filter(
+            RecognitionResult.media_file_id == result.media_file_id,
+            RecognitionResult.id != result_id
+        ).update({"is_selected": False})
 
-            # 选中当前结果
-            result.is_selected = True
-            db.commit()
+        # 选中当前结果
+        result.is_selected = True
+        db.commit()
 
-            logger.info(f"选择识别结果: {result_id}")
+        logger.info(f"选择识别结果: {result_id}")
 
-            return {
-                "id": result_id,
-                "status": "success",
-                "message": "已选择识别结果"
-            }
+        return {
+            "id": result_id,
+            "status": "success",
+            "message": "已选择识别结果"
+        }
 
     except Exception as e:
         logger.error(f"选择识别结果失败: {e}")

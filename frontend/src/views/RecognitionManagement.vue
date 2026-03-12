@@ -163,14 +163,30 @@ import { Document, CircleCheck, Clock, CircleClose, VideoPlay, Refresh } from '@
 
 // 统计数据
 const stats = ref({
-  total: 383,
-  success: 1980,
-  processing: 5,
-  failed: 12
+  total: 0,
+  success: 0,
+  processing: 0,
+  failed: 0
 })
 
 // 加载状态
 const loading = ref(false)
+
+// 加载统计数据
+const loadStats = async () => {
+  try {
+    const { getRecognitionStats } = await import('@/api/statistics')
+    const recognitionStats = await getRecognitionStats()
+
+    stats.value.total = recognitionStats.total || 0
+    stats.value.success = recognitionStats.success || 0
+    stats.value.processing = recognitionStats.processing || 0
+    stats.value.failed = recognitionStats.failed || 0
+  } catch (error) {
+    console.error('加载统计数据失败:', error)
+    ElMessage.error('加载统计数据失败')
+  }
+}
 
 // 表格数据
 const tableData = ref([])
@@ -206,6 +222,9 @@ const formatSize = (bytes) => {
 const loadData = async () => {
   loading.value = true
   try {
+    // 加载统计数据
+    await loadStats()
+
     // TODO: 调用实际API
     // const res = await request.get('/api/recognition/pending', {
     //   params: { ...pagination }

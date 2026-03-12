@@ -121,6 +121,42 @@ class ScanHistory(Base):
     completed_at = Column(DateTime, nullable=True)
 
 
+class ScanPath(Base):
+    """扫描路径表"""
+    __tablename__ = "scan_paths"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    path = Column(String(500), unique=True, nullable=False, index=True)
+    recursive = Column(Boolean, nullable=True, default=True)
+    enabled = Column(Boolean, nullable=True, default=True, index=True)
+    last_scan_at = Column(DateTime, nullable=True)
+    last_scan_batch_id = Column(String(36), nullable=True)
+    created_at = Column(DateTime, nullable=True, default=datetime.now)
+    updated_at = Column(DateTime, nullable=True, default=datetime.now, onupdate=datetime.now)
+
+
+class ScanProgress(Base):
+    """扫描进度表"""
+    __tablename__ = "scan_progress"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    batch_id = Column(String(36), unique=True, nullable=False, index=True)
+    task_id = Column(Integer, nullable=False, index=True)
+    target_path = Column(String(500), nullable=False)
+    scan_type = Column(String(20), nullable=False)
+    status = Column(String(20), nullable=False, default="pending")  # pending, running, completed, failed, stopped
+    total_files = Column(Integer, nullable=True, default=0)
+    scanned_files = Column(Integer, nullable=True, default=0)
+    new_files = Column(Integer, nullable=True, default=0)
+    updated_files = Column(Integer, nullable=True, default=0)
+    skipped_files = Column(Integer, nullable=True, default=0)
+    failed_files = Column(Integer, nullable=True, default=0)
+    current_file = Column(String(500), nullable=True)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    last_updated_at = Column(DateTime, nullable=True, default=datetime.now, onupdate=datetime.now)
+
+
 class KeywordLibrary(Base):
     """关键词库表"""
     __tablename__ = "keyword_libraries"

@@ -67,7 +67,7 @@ class ScannerConfig(BaseModel):
     """扫描配置"""
     watch_paths: list = Field(default_factory=lambda: ["D:/Downloads"])
     recursive: bool = True
-    interval: int = 300
+    interval: int = Field(default=300, ge=300, le=600, description="扫描间隔（秒），最小300秒，最大600秒")
 
     class Monitoring(BaseModel):
         enabled: bool = True

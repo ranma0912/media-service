@@ -144,14 +144,30 @@ import { Document, CircleCheck, Clock, CircleClose, FolderOpened, Refresh } from
 
 // 统计数据
 const stats = ref({
-  pending: 45,
-  success: 1980,
-  processing: 3,
-  failed: 8
+  pending: 0,
+  success: 0,
+  processing: 0,
+  failed: 0
 })
 
 // 加载状态
 const loading = ref(false)
+
+// 加载统计数据
+const loadStats = async () => {
+  try {
+    const { getOrganizeStats } = await import('@/api/statistics')
+    const organizeStats = await getOrganizeStats()
+
+    stats.value.pending = organizeStats.pending || 0
+    stats.value.success = organizeStats.success || 0
+    stats.value.processing = organizeStats.processing || 0
+    stats.value.failed = organizeStats.failed || 0
+  } catch (error) {
+    console.error('加载统计数据失败:', error)
+    ElMessage.error('加载统计数据失败')
+  }
+}
 
 // 表格数据
 const tableData = ref([])
@@ -189,6 +205,9 @@ const formatSize = (bytes) => {
 const loadData = async () => {
   loading.value = true
   try {
+    // 加载统计数据
+    await loadStats()
+
     // TODO: 调用实际API
     // const res = await request.get('/api/organize/pending', {
     //   params: { ...pagination }

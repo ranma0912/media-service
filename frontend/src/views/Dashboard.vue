@@ -218,18 +218,33 @@ const handleSettings = () => {
 // 加载统计数据
 const loadStats = async () => {
   try {
-    // TODO: 调用实际API
-    // const res = await request.get('/api/dashboard/stats')
-    // stats.value = res.data
+    // 调用实际API获取媒体统计
+    const { getMediaStats } = await import('@/api/media')
+    const mediaStats = await getMediaStats()
 
-    // 模拟数据
-    stats.value = {
-      totalFiles: 2363,
-      recognizedFiles: 1980,
-      pendingFiles: 383,
-      totalSize: 524288000000 // ~500GB
+    stats.value.totalFiles = mediaStats.total_files || 0
+    stats.value.totalSize = mediaStats.total_size || 0
+
+    // 从识别统计API获取已识别和待识别文件数
+    const { getRecognitionStats } = await import('@/api/statistics')
+    const recognitionStats = await getRecognitionStats()
+    stats.value.recognizedFiles = recognitionStats.success || 0
+    stats.value.pendingFiles = recognitionStats.total || 0
+
+    // 更新类型分布图表
+    if (typeChart && mediaStats.type_distribution) {
+      const typeData = Object.entries(mediaStats.type_distribution).map(([key, value]) => ({
+        value,
+        name: key === 'movie' ? '电影' : key === 'tv' ? '剧集' : key === 'anime' ? '动漫' : '其他'
+      }))
+      typeChart.setOption({
+        series: [{
+          data: typeData
+        }]
+      })
     }
   } catch (error) {
+    console.error('加载统计数据失败:', error)
     ElMessage.error('加载统计数据失败')
   }
 }

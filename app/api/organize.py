@@ -12,7 +12,7 @@ from app.db.models import OrganizeTask, MediaFile
 from app.db.session import get_db
 
 
-router = APIRouter(prefix="/api/organize", tags=["整理管理"])
+router = APIRouter(tags=["整理管理"])
 
 
 class OrganizeRequest(BaseModel):
@@ -171,7 +171,8 @@ async def batch_execute_organize_tasks(
 async def get_organize_tasks(
     status: Optional[str] = None,
     limit: int = 20,
-    offset: int = 0
+    offset: int = 0,
+    db: Session = Depends(get_db)
 ):
     """
     获取整理任务列表
@@ -180,54 +181,19 @@ async def get_organize_tasks(
     - **limit**: 返回数量限制
     - **offset**: 偏移量
     """
-    with get_db() as db:
-        query = db.query(OrganizeTask)
+    query = db.query(OrganizeTask)
 
-        if status:
-            query = query.filter(OrganizeTask.task_status == status)
+    if status:
+        query = query.filter(OrganizeTask.task_status == status)
 
-        tasks = query.order_by(
-            OrganizeTask.created_at.desc()
-        ).offset(offset).limit(limit).all()
+    tasks = query.order_by(
+        OrganizeTask.created_at.desc()
+    ).offset(offset).limit(limit).all()
 
-        return [
-            {
-                "id": task.id,
-                "media_file_id": task.media_file_id,
-                "source_path": task.source_path,
-                "target_path": task.target_path,
-                "action_type": task.action_type,
-                "task_status": task.task_status,
-                "conflict_strategy": task.conflict_strategy,
-                "error_message": task.error_message,
-                "started_at": task.started_at.isoformat() if task.started_at else None,
-                "completed_at": task.completed_at.isoformat() if task.completed_at else None,
-                "created_at": task.created_at.isoformat() if task.created_at else None
-            }
-            for task in tasks
-        ]
-
-
-@router.get("/tasks/{task_id}")
-async def get_organize_task_detail(task_id: int):
-    """
-    获取整理任务详情
-
-    - **task_id**: 任务ID
-    """
-    with get_db() as db:
-        task = db.query(OrganizeTask).filter_by(id=task_id).first()
-
-        if not task:
-            raise HTTPException(status_code=404, detail="整理任务不存在")
-
-        # 获取关联的媒体文件信息
-        media_file = db.query(MediaFile).filter_by(id=task.media_file_id).first()
-
-        return {
+    return [
+        {
             "id": task.id,
             "media_file_id": task.media_file_id,
-            "file_name": media_file.file_name if media_file else None,
             "source_path": task.source_path,
             "target_path": task.target_path,
             "action_type": task.action_type,
@@ -238,6 +204,42 @@ async def get_organize_task_detail(task_id: int):
             "completed_at": task.completed_at.isoformat() if task.completed_at else None,
             "created_at": task.created_at.isoformat() if task.created_at else None
         }
+        for task in tasks
+    ]
+
+
+@router.get("/tasks/{task_id}")
+async def get_organize_task_detail(
+    task_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    获取整理任务详情
+
+    - **task_id**: 任务ID
+    """
+    task = db.query(OrganizeTask).filter_by(id=task_id).first()
+
+    if not task:
+        raise HTTPException(status_code=404, detail="整理任务不存在")
+
+    # 获取关联的媒体文件信息
+    media_file = db.query(MediaFile).filter_by(id=task.media_file_id).first()
+
+    return {
+        "id": task.id,
+        "media_file_id": task.media_file_id,
+        "file_name": media_file.file_name if media_file else None,
+        "source_path": task.source_path,
+        "target_path": task.target_path,
+        "action_type": task.action_type,
+        "task_status": task.task_status,
+        "conflict_strategy": task.conflict_strategy,
+        "error_message": task.error_message,
+        "started_at": task.started_at.isoformat() if task.started_at else None,
+        "completed_at": task.completed_at.isoformat() if task.completed_at else None,
+        "created_at": task.created_at.isoformat() if task.created_at else None
+    }
 
 
 @router.post("/preview")
@@ -267,7 +269,8 @@ async def preview_organize(request: OrganizeRequest):
 @router.get("/pending")
 async def get_pending_organize(
     limit: int = 50,
-    offset: int = 0
+    offset: int = 0,
+    db: Session = Depends(get_db)
 ):
     """
     获取待整理文件列表
@@ -275,31 +278,30 @@ async def get_pending_organize(
     - **limit**: 返回数量限制
     - **offset**: 偏移量
     """
-    with get_db() as db:
-        # 查询有识别结果但没有整理任务的文件
-        files = db.query(MediaFile).filter(
-            MediaFile.id.in_(
-                db.query(MediaFile.id).join(
-                    "recognition_results"
-                ).filter(
-                    RecognitionResult.is_selected == True
-                ).distinct()
-            ),
-            ~MediaFile.id.in_(
-                db.query(OrganizeTask.media_file_id).distinct()
-            )
-        ).order_by(
-            MediaFile.scanned_at.desc()
-        ).offset(offset).limit(limit).all()
+    # 查询有识别结果但没有整理任务的文件
+    files = db.query(MediaFile).filter(
+        MediaFile.id.in_(
+            db.query(MediaFile.id).join(
+                "recognition_results"
+            ).filter(
+                RecognitionResult.is_selected == True
+            ).distinct()
+        ),
+        ~MediaFile.id.in_(
+            db.query(OrganizeTask.media_file_id).distinct()
+        )
+    ).order_by(
+        MediaFile.scanned_at.desc()
+    ).offset(offset).limit(limit).all()
 
-        return [
-            {
-                "id": f.id,
-                "file_name": f.file_name,
-                "file_path": f.file_path,
-                "file_size": f.file_size,
-                "media_type": f.media_type,
-                "scanned_at": f.scanned_at.isoformat() if f.scanned_at else None
-            }
-            for f in files
-        ]
+    return [
+        {
+            "id": f.id,
+            "file_name": f.file_name,
+            "file_path": f.file_path,
+            "file_size": f.file_size,
+            "media_type": f.media_type,
+            "scanned_at": f.scanned_at.isoformat() if f.scanned_at else None
+        }
+        for f in files
+    ]

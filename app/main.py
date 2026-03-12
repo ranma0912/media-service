@@ -116,6 +116,18 @@ def main():
     from app.api.server import create_app
     app = create_app()
 
+    # 显示访问链接
+    logger.info("=" * 60)
+    logger.info("服务启动成功！")
+    logger.info("=" * 60)
+    logger.info("前端仪表盘: http://localhost:5173")
+    logger.info(f"后端 API:   http://{config.server.host}:{config.server.port}")
+    logger.info(f"API 文档:   http://{config.server.host}:{config.server.port}/docs")
+    logger.info("=" * 60)
+    logger.info("提示: 请先启动前端开发服务器")
+    logger.info("      cd frontend && npm install && npm run dev")
+    logger.info("=" * 60)
+
     import uvicorn
     uvicorn.run(
         app,

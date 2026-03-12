@@ -68,13 +68,31 @@
       <el-tabs v-model="activeConfigTab">
         <el-tab-pane label="扫描配置" name="scan">
           <el-form :model="config.scan" label-width="150px">
-            <el-form-item label="递归扫描">
+            <el-form-item>
+              <template #label>
+                <span>递归扫描</span>
+                <el-tooltip content="是否递归扫描子目录" placement="top">
+                  <el-icon class="ml-2"><QuestionFilled /></el-icon>
+                </el-tooltip>
+              </template>
               <el-switch v-model="config.scan.recursive" />
             </el-form-item>
-            <el-form-item label="扫描间隔(秒)">
-              <el-input-number v-model="config.scan.interval" :min="60" :max="3600" />
+            <el-form-item>
+              <template #label>
+                <span>扫描间隔(秒)</span>
+                <el-tooltip content="定期扫描的时间间隔，范围：300-600秒" placement="top">
+                  <el-icon class="ml-2"><QuestionFilled /></el-icon>
+                </el-tooltip>
+              </template>
+              <el-input-number v-model="config.scan.interval" :min="300" :max="600" />
             </el-form-item>
-            <el-form-item label="监控路径">
+            <el-form-item>
+              <template #label>
+                <span>监控路径</span>
+                <el-tooltip content="需要监控的文件目录路径，每行一个" placement="top">
+                  <el-icon class="ml-2"><QuestionFilled /></el-icon>
+                </el-tooltip>
+              </template>
               <el-input v-model="config.scan.paths" type="textarea" :rows="3" placeholder="每行一个路径" />
             </el-form-item>
             <el-form-item>
@@ -84,16 +102,34 @@
         </el-tab-pane>
         <el-tab-pane label="识别配置" name="recognition">
           <el-form :model="config.recognition" label-width="150px">
-            <el-form-item label="识别模式">
+            <el-form-item>
+              <template #label>
+                <span>识别模式</span>
+                <el-tooltip content="自动模式：扫描后自动识别；手动模式：需要手动触发识别" placement="top">
+                  <el-icon class="ml-2"><QuestionFilled /></el-icon>
+                </el-tooltip>
+              </template>
               <el-radio-group v-model="config.recognition.mode">
                 <el-radio label="auto">自动</el-radio>
                 <el-radio label="manual">手动</el-radio>
               </el-radio-group>
             </el-form-item>
-            <el-form-item label="置信度阈值">
+            <el-form-item>
+              <template #label>
+                <span>置信度阈值</span>
+                <el-tooltip content="识别结果的可信度阈值，范围：0-100，值越高识别越严格" placement="top">
+                  <el-icon class="ml-2"><QuestionFilled /></el-icon>
+                </el-tooltip>
+              </template>
               <el-slider v-model="config.recognition.confidence" :min="0" :max="100" />
             </el-form-item>
-            <el-form-item label="自动整理">
+            <el-form-item>
+              <template #label>
+                <span>自动整理</span>
+                <el-tooltip content="识别成功后是否自动整理文件到目标目录" placement="top">
+                  <el-icon class="ml-2"><QuestionFilled /></el-icon>
+                </el-tooltip>
+              </template>
               <el-switch v-model="config.recognition.autoOrganize" />
             </el-form-item>
             <el-form-item>
@@ -103,14 +139,26 @@
         </el-tab-pane>
         <el-tab-pane label="整理配置" name="organize">
           <el-form :model="config.organize" label-width="150px">
-            <el-form-item label="操作类型">
+            <el-form-item>
+              <template #label>
+                <span>操作类型</span>
+                <el-tooltip content="移动：将文件移动到目标目录；复制：复制文件到目标目录；硬链接：创建硬链接到目标目录" placement="top">
+                  <el-icon class="ml-2"><QuestionFilled /></el-icon>
+                </el-tooltip>
+              </template>
               <el-select v-model="config.organize.actionType">
                 <el-option label="移动" value="move" />
                 <el-option label="复制" value="copy" />
                 <el-option label="硬链接" value="link" />
               </el-select>
             </el-form-item>
-            <el-form-item label="冲突策略">
+            <el-form-item>
+              <template #label>
+                <span>冲突策略</span>
+                <el-tooltip content="跳过：遇到重名文件时跳过；覆盖：覆盖已有文件；重命名：自动重命名新文件" placement="top">
+                  <el-icon class="ml-2"><QuestionFilled /></el-icon>
+                </el-tooltip>
+              </template>
               <el-select v-model="config.organize.conflictStrategy">
                 <el-option label="跳过" value="skip" />
                 <el-option label="覆盖" value="overwrite" />
@@ -131,7 +179,7 @@
 import { ref, reactive, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import * as echarts from 'echarts'
-import { Refresh, VideoPlay, VideoPause, RefreshRight } from '@element-plus/icons-vue'
+import { Refresh, VideoPlay, VideoPause, RefreshRight, QuestionFilled } from '@element-plus/icons-vue'
 
 // 进程状态
 const processStatus = ref({
@@ -149,6 +197,14 @@ const systemStats = ref({
   disk: 75
 })
 
+// 历史数据（存储最近60个数据点，每分钟更新一次，共60分钟数据）
+const historyData = ref({
+  cpu: Array(60).fill(0),
+  memory: Array(60).fill(0),
+  disk: Array(60).fill(0),
+  timestamps: Array(60).fill('')
+})
+
 // 图表引用
 const cpuChartRef = ref(null)
 const memoryChartRef = ref(null)
@@ -163,7 +219,7 @@ const config = reactive({
   scan: {
     recursive: true,
     interval: 300,
-    paths: 'D:/Downloads\nE:/Media/Inbox'
+    paths: ''
   },
   recognition: {
     mode: 'auto',
@@ -178,105 +234,224 @@ const config = reactive({
 
 // 初始化资源监控图表
 const initResourceCharts = () => {
-  const chartOptions = {
+  // 生成初始时间戳（每分钟一个）
+  const now = new Date()
+  for (let i = 59; i >= 0; i--) {
+    const time = new Date(now.getTime() - i * 60000)
+    historyData.value.timestamps[i] = time.toLocaleTimeString('zh-CN', { hour12: false })
+  }
+
+  // CPU折线图配置
+  const cpuOption = {
+    tooltip: {
+      trigger: 'axis',
+      formatter: '{b}<br/>CPU使用率: {c}%'
+    },
+    grid: {
+      left: '3%',
+      right: '4%',
+      bottom: '3%',
+      top: '10%',
+      containLabel: true
+    },
+    xAxis: {
+      type: 'category',
+      boundaryGap: false,
+      data: historyData.value.timestamps,
+      axisLabel: {
+        fontSize: 10
+      }
+    },
+    yAxis: {
+      type: 'value',
+      max: 100,
+      axisLabel: {
+        formatter: '{value}%'
+      }
+    },
     series: [
       {
-        type: 'gauge',
-        startAngle: 180,
-        endAngle: 0,
-        min: 0,
-        max: 100,
-        splitNumber: 5,
-        axisLine: {
-          lineStyle: {
-            width: 10,
-            color: [
-              [0.6, '#67e0e3'],
-              [0.8, '#37a2da'],
-              [1, '#fd666d']
+        name: 'CPU使用率',
+        type: 'line',
+        smooth: true,
+        data: historyData.value.cpu,
+        itemStyle: {
+          color: '#67e0e3'
+        },
+        areaStyle: {
+          color: {
+            type: 'linear',
+            x: 0,
+            y: 0,
+            x2: 0,
+            y2: 1,
+            colorStops: [
+              { offset: 0, color: 'rgba(103, 224, 227, 0.3)' },
+              { offset: 1, color: 'rgba(103, 224, 227, 0.05)' }
             ]
           }
+        }
+      }
+    ]
+  }
+
+  // 内存折线图配置
+  const memoryOption = {
+    tooltip: {
+      trigger: 'axis',
+      formatter: '{b}<br/>内存使用率: {c}%'
+    },
+    grid: {
+      left: '3%',
+      right: '4%',
+      bottom: '3%',
+      top: '10%',
+      containLabel: true
+    },
+    xAxis: {
+      type: 'category',
+      boundaryGap: false,
+      data: historyData.value.timestamps,
+      axisLabel: {
+        fontSize: 10
+      }
+    },
+    yAxis: {
+      type: 'value',
+      max: 100,
+      axisLabel: {
+        formatter: '{value}%'
+      }
+    },
+    series: [
+      {
+        name: '内存使用率',
+        type: 'line',
+        smooth: true,
+        data: historyData.value.memory,
+        itemStyle: {
+          color: '#37a2da'
         },
-        pointer: {
-          icon: 'path://M12.8,0.7l12,40.1H0.7L12.8,0.7z M12.8,0.7L0.2,40.1h25.3L12.8,0.7z',
-          length: '12%',
-          width: 20,
-          offsetCenter: [0, '-60%'],
-          itemStyle: {
-            color: 'auto'
+        areaStyle: {
+          color: {
+            type: 'linear',
+            x: 0,
+            y: 0,
+            x2: 0,
+            y2: 1,
+            colorStops: [
+              { offset: 0, color: 'rgba(55, 162, 218, 0.3)' },
+              { offset: 1, color: 'rgba(55, 162, 218, 0.05)' }
+            ]
           }
+        }
+      }
+    ]
+  }
+
+  // 磁盘折线图配置
+  const diskOption = {
+    tooltip: {
+      trigger: 'axis',
+      formatter: '{b}<br/>磁盘使用率: {c}%'
+    },
+    grid: {
+      left: '3%',
+      right: '4%',
+      bottom: '3%',
+      top: '10%',
+      containLabel: true
+    },
+    xAxis: {
+      type: 'category',
+      boundaryGap: false,
+      data: historyData.value.timestamps,
+      axisLabel: {
+        fontSize: 10
+      }
+    },
+    yAxis: {
+      type: 'value',
+      max: 100,
+      axisLabel: {
+        formatter: '{value}%'
+      }
+    },
+    series: [
+      {
+        name: '磁盘使用率',
+        type: 'line',
+        smooth: true,
+        data: historyData.value.disk,
+        itemStyle: {
+          color: '#fd666d'
         },
-        axisTick: {
-          length: 12,
-          lineStyle: {
-            color: 'auto',
-            width: 2
+        areaStyle: {
+          color: {
+            type: 'linear',
+            x: 0,
+            y: 0,
+            x2: 0,
+            y2: 1,
+            colorStops: [
+              { offset: 0, color: 'rgba(253, 102, 109, 0.3)' },
+              { offset: 1, color: 'rgba(253, 102, 109, 0.05)' }
+            ]
           }
-        },
-        splitLine: {
-          length: 20,
-          lineStyle: {
-            color: 'auto',
-            width: 5
-          }
-        },
-        axisLabel: {
-          color: '#464646',
-          fontSize: 20,
-          distance: -60,
-          formatter: '{value}%'
-        },
-        title: {
-          offsetCenter: [0, '-20%'],
-          fontSize: 30
-        },
-        detail: {
-          fontSize: 60,
-          offsetCenter: [0, '0%'],
-          valueAnimation: true,
-          formatter: '{value}%',
-          color: 'auto'
-        },
-        data: [
-          {
-            value: 0
-          }
-        ]
+        }
       }
     ]
   }
 
   if (cpuChartRef.value) {
     cpuChart = echarts.init(cpuChartRef.value)
-    cpuChart.setOption(chartOptions)
+    cpuChart.setOption(cpuOption)
   }
 
   if (memoryChartRef.value) {
     memoryChart = echarts.init(memoryChartRef.value)
-    memoryChart.setOption(chartOptions)
+    memoryChart.setOption(memoryOption)
   }
 
   if (diskChartRef.value) {
     diskChart = echarts.init(diskChartRef.value)
-    diskChart.setOption(chartOptions)
+    diskChart.setOption(diskOption)
   }
 }
 
 // 更新资源监控数据
 const updateResourceCharts = () => {
+  // 更新历史数据
+  historyData.value.cpu.shift()
+  historyData.value.cpu.push(systemStats.value.cpu)
+
+  historyData.value.memory.shift()
+  historyData.value.memory.push(systemStats.value.memory)
+
+  historyData.value.disk.shift()
+  historyData.value.disk.push(systemStats.value.disk)
+
+  // 更新时间戳
+  historyData.value.timestamps.shift()
+  historyData.value.timestamps.push(new Date().toLocaleTimeString('zh-CN', { hour12: false }))
+
+  // 更新图表
   if (cpuChart) {
     cpuChart.setOption({
-      series: [{ data: [{ value: systemStats.value.cpu }] }]
+      xAxis: { data: historyData.value.timestamps },
+      series: [{ data: historyData.value.cpu }]
     })
   }
   if (memoryChart) {
     memoryChart.setOption({
-      series: [{ data: [{ value: systemStats.value.memory }] }]
+      xAxis: { data: historyData.value.timestamps },
+      series: [{ data: historyData.value.memory }]
     })
   }
   if (diskChart) {
     diskChart.setOption({
-      series: [{ data: [{ value: systemStats.value.disk }] }]
+      xAxis: { data: historyData.value.timestamps },
+      series: [{ data: historyData.value.disk }]
     })
   }
 }
@@ -284,75 +459,114 @@ const updateResourceCharts = () => {
 // 加载进程状态
 const loadProcessStatus = async () => {
   try {
-    // TODO: 调用实际API
-    // const res = await request.get('/api/process/status')
-    // processStatus.value = res.data
+    // 调用实际API
+    const { getProcessStatus } = await import('@/api/process')
+    const res = await getProcessStatus()
+    processStatus.value = {
+      status: res.status || 'unknown',
+      pid: res.pid || null,
+      uptime: res.uptime || '-',
+      version: res.version || '1.0.0',
+      startTime: res.start_time || '-'
+    }
   } catch (error) {
+    console.error('加载进程状态失败:', error)
     ElMessage.error('加载进程状态失败')
   }
 }
 
 // 启动服务
-const handleStart = () => {
-  ElMessageBox.confirm('确定要启动服务吗？', '提示', {
-    confirmButtonText: '确定',
-    cancelButtonText: '取消',
-    type: 'info'
-  }).then(async () => {
-    try {
-      // TODO: 调用实际API
-      // await request.post('/api/process/control', { action: 'start' })
-      ElMessage.success('服务启动成功')
-      loadProcessStatus()
-    } catch (error) {
+const handleStart = async () => {
+  try {
+    await ElMessageBox.confirm('确定要启动服务吗？', '提示', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'info'
+    })
+
+    // 调用实际API
+    const { startService } = await import('@/api/process')
+    await startService()
+
+    ElMessage.success('服务启动成功')
+    loadProcessStatus()
+  } catch (error) {
+    if (error !== 'cancel') {
+      console.error('启动服务失败:', error)
       ElMessage.error('启动服务失败')
     }
-  }).catch(() => {})
+  }
 }
 
 // 停止服务
-const handleStop = () => {
-  ElMessageBox.confirm('确定要停止服务吗？', '提示', {
-    confirmButtonText: '确定',
-    cancelButtonText: '取消',
-    type: 'warning'
-  }).then(async () => {
-    try {
-      // TODO: 调用实际API
-      // await request.post('/api/process/control', { action: 'stop' })
-      ElMessage.success('服务停止成功')
-      loadProcessStatus()
-    } catch (error) {
+const handleStop = async () => {
+  try {
+    await ElMessageBox.confirm('确定要停止服务吗？', '提示', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning'
+    })
+
+    // 调用实际API
+    const { stopService } = await import('@/api/process')
+    await stopService()
+
+    ElMessage.success('服务停止成功')
+    loadProcessStatus()
+  } catch (error) {
+    if (error !== 'cancel') {
+      console.error('停止服务失败:', error)
       ElMessage.error('停止服务失败')
     }
-  }).catch(() => {})
+  }
 }
 
 // 重启服务
-const handleRestart = () => {
-  ElMessageBox.confirm('确定要重启服务吗？', '提示', {
-    confirmButtonText: '确定',
-    cancelButtonText: '取消',
-    type: 'warning'
-  }).then(async () => {
-    try {
-      // TODO: 调用实际API
-      // await request.post('/api/process/control', { action: 'restart' })
-      ElMessage.success('服务重启成功')
-      loadProcessStatus()
-    } catch (error) {
+const handleRestart = async () => {
+  try {
+    await ElMessageBox.confirm('确定要重启服务吗？', '提示', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning'
+    })
+
+    // 调用实际API
+    const { restartService } = await import('@/api/process')
+    await restartService()
+
+    ElMessage.success('服务重启成功')
+    loadProcessStatus()
+  } catch (error) {
+    if (error !== 'cancel') {
+      console.error('重启服务失败:', error)
       ElMessage.error('重启服务失败')
     }
-  }).catch(() => {})
+  }
 }
 
 // 保存配置
 const handleSaveConfig = async (type) => {
   try {
-    // TODO: 调用实际API
-    // await request.put(`/api/config/${type}`, config[type])
+    // 调用实际API
+    const { updateConfigValue } = await import('@/api/config')
+
+    // 根据类型保存不同的配置
+    if (type === 'scan') {
+      await updateConfigValue('scan.recursive', config.scan.recursive)
+      await updateConfigValue('scan.interval', config.scan.interval)
+      await updateConfigValue('scan.paths', config.scan.paths.split('\n'))
+    } else if (type === 'recognition') {
+      await updateConfigValue('recognition.mode', config.recognition.mode)
+      await updateConfigValue('recognition.confidence', config.recognition.confidence / 100)
+      await updateConfigValue('recognition.autoOrganize', config.recognition.autoOrganize)
+    } else if (type === 'organize') {
+      await updateConfigValue('organize.actionType', config.organize.actionType)
+      await updateConfigValue('organize.conflictStrategy', config.organize.conflictStrategy)
+    }
+
     ElMessage.success('配置保存成功')
   } catch (error) {
+    console.error('保存配置失败:', error)
     ElMessage.error('保存配置失败')
   }
 }
@@ -366,17 +580,25 @@ const handleResize = () => {
 
 // 定时更新系统资源
 let resourceTimer = null
-const startResourceMonitor = () => {
-  resourceTimer = setInterval(() => {
-    // TODO: 调用实际API获取系统资源数据
-    // 模拟数据变化
+const loadSystemStats = async () => {
+  try {
+    const { getSystemStats } = await import('@/api/process')
+    const res = await getSystemStats()
     systemStats.value = {
-      cpu: Math.floor(Math.random() * 40) + 30,
-      memory: Math.floor(Math.random() * 20) + 55,
-      disk: 75
+      cpu: res.cpu,
+      memory: res.memory,
+      disk: res.disk
     }
     updateResourceCharts()
-  }, 5000)
+  } catch (error) {
+    console.error('加载系统资源统计失败:', error)
+  }
+}
+
+const startResourceMonitor = () => {
+  resourceTimer = setInterval(() => {
+    loadSystemStats()
+  }, 60000)
 }
 
 onMounted(() => {

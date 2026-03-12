@@ -10,9 +10,10 @@ from datetime import datetime
 from loguru import logger
 from pymediainfo import MediaInfo
 
-from app.db.models import MediaFile, SubtitleFile, ScanHistory
-from app.db.session import get_db
+from app.db.models import MediaFile, SubtitleFile, ScanHistory, ScanProgress
+from app.db import get_db_context
 from app.core.config import config_manager
+from app.core.websocket import manager
 
 
 # 支持的媒体文件扩展名
@@ -31,12 +32,16 @@ SUBTITLE_EXTENSIONS = {
 class FileScanner:
     """文件扫描器"""
 
-    def __init__(self):
+    def __init__(self, task_id: int = None, batch_id: str = None):
+        self.task_id = task_id
+        self.batch_id = batch_id
         self.scanned_files: Set[Path] = set()
         self.new_files: List[Dict[str, Any]] = []
         self.updated_files: List[Dict[str, Any]] = []
         self.skipped_files: int = 0
         self.failed_files: List[Dict[str, Any]] = []
+        self.total_files: int = 0
+        self.last_progress_update: datetime = None
 
     def is_media_file(self, path: Path) -> bool:
         """检查是否为媒体文件"""
@@ -45,6 +50,64 @@ class FileScanner:
     def is_subtitle_file(self, path: Path) -> bool:
         """检查是否为字幕文件"""
         return path.suffix.lower() in SUBTITLE_EXTENSIONS
+
+    async def _update_progress(self, current_file: str = None, force: bool = False):
+        """
+        更新扫描进度
+
+        Args:
+            current_file: 当前正在处理的文件
+            force: 是否强制更新（忽略时间限制）
+        """
+        import asyncio
+        from datetime import timedelta
+
+
+        now = datetime.now()
+        
+        # 检查是否需要更新（每分钟更新一次，或强制更新）
+        if not force and self.last_progress_update:
+            if now - self.last_progress_update < timedelta(minutes=1):
+                return
+        
+        self.last_progress_update = now
+        
+        # 准备进度数据
+        progress = {
+            "batch_id": self.batch_id,
+            "task_id": self.task_id,
+            "status": "running",
+            "total_files": self.total_files,
+            "scanned_files": len(self.scanned_files),
+            "new_files": len(self.new_files),
+            "updated_files": len(self.updated_files),
+            "skipped_files": self.skipped_files,
+            "failed_files": len(self.failed_files),
+            "current_file": current_file,
+            "progress": len(self.scanned_files) / self.total_files * 100 if self.total_files > 0 else 0
+        }
+        
+        # 更新数据库
+        try:
+            with get_db_context() as db:
+                db_progress = db.query(ScanProgress).filter_by(batch_id=self.batch_id).first()
+                if db_progress:
+                    for key, value in progress.items():
+                        if hasattr(db_progress, key):
+                            setattr(db_progress, key, value)
+                    db_progress.last_updated_at = now
+                else:
+                    db_progress = ScanProgress(**progress)
+                    db.add(db_progress)
+                db.commit()
+        except Exception as e:
+            logger.error(f"更新扫描进度失败: {e}")
+        
+        # 通过WebSocket推送进度
+        try:
+            await manager.send_progress(self.task_id, progress)
+        except Exception as e:
+            logger.error(f"发送进度WebSocket消息失败: {e}")
 
     def calculate_file_hash(self, path: Path, chunk_size: int = 8192) -> Optional[str]:
         """
@@ -115,7 +178,7 @@ class FileScanner:
             logger.error(f"提取媒体元数据失败 {path}: {e}")
             return {}
 
-    def scan_directory(
+    async def scan_directory(
         self,
         path: str,
         recursive: bool = True,
@@ -134,6 +197,7 @@ class FileScanner:
         Returns:
             扫描历史记录
         """
+        import asyncio
         start_time = datetime.now()
         scan_path = Path(path)
 
@@ -149,19 +213,29 @@ class FileScanner:
         if not batch_id:
             import uuid
             batch_id = str(uuid.uuid4())
+        
+        self.batch_id = batch_id
 
         logger.info(f"开始扫描: {path} (类型: {scan_type}, 递归: {recursive}, 批次ID: {batch_id})")
 
-        # 遍历目录
+        # 遍历目录，先统计总文件数
         if recursive:
-            files = scan_path.rglob('*')
+            files = list(scan_path.rglob('*'))
         else:
-            files = scan_path.glob('*')
-
+            files = list(scan_path.glob('*'))
+        
+        self.total_files = len([f for f in files if f.is_file() and (self.is_media_file(f) or self.is_subtitle_file(f))])
+        
+        # 初始化进度
+        await self._update_progress(force=True)
+        
         # 扫描文件
         for file_path in files:
             if not file_path.is_file():
                 continue
+
+            # 更新当前文件
+            await self._update_progress(current_file=str(file_path))
 
             # 处理媒体文件
             if self.is_media_file(file_path):
@@ -174,25 +248,96 @@ class FileScanner:
         end_time = datetime.now()
         duration = int((end_time - start_time).total_seconds())
 
-        scan_history = ScanHistory(
-            batch_id=batch_id,
-            target_path=str(scan_path),
-            scan_type=scan_type,
-            recursive=recursive,
-            total_files=len(self.scanned_files),
-            new_files=len(self.new_files),
-            updated_files=len(self.updated_files),
-            skipped_files=self.skipped_files,
-            failed_files=len(self.failed_files),
-            duration_seconds=duration,
-            started_at=start_time,
-            completed_at=end_time
-        )
+        # 更新最终进度
+        final_progress = {
+            "batch_id": self.batch_id,
+            "task_id": self.task_id,
+            "status": "completed",
+            "total_files": self.total_files,
+            "scanned_files": len(self.scanned_files),
+            "new_files": len(self.new_files),
+            "updated_files": len(self.updated_files),
+            "skipped_files": self.skipped_files,
+            "failed_files": len(self.failed_files),
+            "current_file": None,
+            "progress": 100
+        }
+        
+        # 更新进度数据库
+        try:
+            with get_db_context() as db:
+                db_progress = db.query(ScanProgress).filter_by(batch_id=self.batch_id).first()
+                if db_progress:
+                    for key, value in final_progress.items():
+                        if hasattr(db_progress, key):
+                            setattr(db_progress, key, value)
+                    db_progress.completed_at = end_time
+                    db_progress.last_updated_at = end_time
+                else:
+                    final_progress["started_at"] = start_time
+                    final_progress["completed_at"] = end_time
+                    db_progress = ScanProgress(**final_progress)
+                    db.add(db_progress)
+                db.commit()
+        except Exception as e:
+            logger.error(f"更新最终扫描进度失败: {e}")
+        
+        # 通过WebSocket推送最终进度
+        try:
+            await manager.send_progress(self.task_id, final_progress)
+        except Exception as e:
+            logger.error(f"发送最终进度WebSocket消息失败: {e}")
 
-        # 保存到数据库
-        with get_db() as db:
-            db.add(scan_history)
-            db.commit()
+        # 更新或创建扫描历史记录
+        with get_db_context() as db:
+            if self.task_id:
+                # 更新已存在的记录
+                scan_history = db.query(ScanHistory).filter_by(id=self.task_id).first()
+                if scan_history:
+                    scan_history.total_files = self.total_files
+                    scan_history.new_files = len(self.new_files)
+                    scan_history.updated_files = len(self.updated_files)
+                    scan_history.skipped_files = self.skipped_files
+                    scan_history.failed_files = len(self.failed_files)
+                    scan_history.duration_seconds = duration
+                    scan_history.completed_at = end_time
+                    db.commit()
+                else:
+                    # 如果找不到记录，创建新记录
+                    scan_history = ScanHistory(
+                        batch_id=self.batch_id,
+                        target_path=str(scan_path),
+                        scan_type=scan_type,
+                        recursive=recursive,
+                        total_files=self.total_files,
+                        new_files=len(self.new_files),
+                        updated_files=len(self.updated_files),
+                        skipped_files=self.skipped_files,
+                        failed_files=len(self.failed_files),
+                        duration_seconds=duration,
+                        started_at=start_time,
+                        completed_at=end_time
+                    )
+                    db.add(scan_history)
+                    db.commit()
+            else:
+                # 没有 task_id，创建新记录
+                scan_history = ScanHistory(
+                    batch_id=self.batch_id,
+                    target_path=str(scan_path),
+                    scan_type=scan_type,
+                    recursive=recursive,
+                    total_files=self.total_files,
+                    new_files=len(self.new_files),
+                    updated_files=len(self.updated_files),
+                    skipped_files=self.skipped_files,
+                    failed_files=len(self.failed_files),
+                    duration_seconds=duration,
+                    started_at=start_time,
+                    completed_at=end_time
+                )
+                db.add(scan_history)
+                db.commit()
 
         logger.info(f"扫描完成: 总计 {len(self.scanned_files)} 个文件, "
                    f"新增 {len(self.new_files)} 个, "
@@ -209,7 +354,7 @@ class FileScanner:
 
         Args:
             file_path: 媒体文件路径
-            scan_type: 扫描类型
+            scan_type: 扫描类型 (full/incremental/rescan)
         """
         try:
             self.scanned_files.add(file_path)
@@ -232,12 +377,24 @@ class FileScanner:
             file_data.update(metadata)
 
             # 检查文件是否已存在
-            with get_db() as db:
+            with get_db_context() as db:
                 existing_file = db.query(MediaFile).filter_by(
                     file_path=file_data['file_path']
                 ).first()
 
                 if existing_file:
+                    # 重新扫描：强制更新文件，不进行任何跳过检查
+                    if scan_type == 'rescan':
+                        # 强制更新文件元数据
+                        for key, value in file_data.items():
+                            if hasattr(existing_file, key):
+                                setattr(existing_file, key, value)
+                        existing_file.updated_at = datetime.now()
+                        self.updated_files.append(file_data)
+                        logger.debug(f"重新扫描文件: {file_path.name}")
+                        db.commit()
+                        return
+
                     # 增量扫描：检查文件是否更新
                     if scan_type == 'incremental':
                         # 比较修改时间和文件大小
@@ -291,7 +448,7 @@ class FileScanner:
         try:
             # 查找关联的媒体文件
             media_file = None
-            with get_db() as db:
+            with get_db_context() as db:
                 # 尝试通过文件名匹配
                 media_file = db.query(MediaFile).filter(
                     MediaFile.file_path.like(f"{file_path.parent}%{file_path.stem}%")
