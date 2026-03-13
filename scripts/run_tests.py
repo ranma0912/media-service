@@ -128,11 +128,9 @@ def test_database():
 
 def main():
     """主函数"""
-    print("
-" + "="*70)
+    print("\n" + "="*70)
     print("  MediaService 项目测试")
-    print("="*70 + "
-")
+    print("="*70 + "\n")
 
     # 运行测试
     test_project_structure()
@@ -140,11 +138,9 @@ def main():
     test_database()
 
     # 测试总结
-    print("
-" + "="*70)
+    print("\n" + "="*70)
     print("  测试完成")
-    print("="*70 + "
-")
+    print("="*70 + "\n")
 
 
 if __name__ == "__main__":

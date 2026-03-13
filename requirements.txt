@@ -20,6 +20,9 @@ jsonschema>=4.20.0
 # 媒体处理
 pymediainfo>=6.0
 
+# 任务调度
+apscheduler>=3.10.0
+
 # 可选依赖（增强阶段）
 # openai>=1.0
 # imagehash>=4.3

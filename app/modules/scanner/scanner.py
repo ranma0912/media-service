@@ -32,7 +32,7 @@ SUBTITLE_EXTENSIONS = {
 class FileScanner:
     """文件扫描器"""
 
-    def __init__(self, task_id: int = None, batch_id: str = None):
+    def __init__(self, task_id: int = None, batch_id: str = None, ignore_patterns: List[str] = None, skip_mode: str = "keyword"):
         self.task_id = task_id
         self.batch_id = batch_id
         self.scanned_files: Set[Path] = set()
@@ -42,6 +42,9 @@ class FileScanner:
         self.failed_files: List[Dict[str, Any]] = []
         self.total_files: int = 0
         self.last_progress_update: datetime = None
+        self.ignore_patterns = ignore_patterns or []
+        self.skip_mode = skip_mode  # keyword: 仅跳过关键词库, record: 跳过关键词库和已扫描, none: 不跳过任何文件
+        self._stopped = False  # 停止标志
 
     def is_media_file(self, path: Path) -> bool:
         """检查是否为媒体文件"""
@@ -50,6 +53,102 @@ class FileScanner:
     def is_subtitle_file(self, path: Path) -> bool:
         """检查是否为字幕文件"""
         return path.suffix.lower() in SUBTITLE_EXTENSIONS
+
+    def _check_stop_status(self) -> bool:
+        """
+        检查任务是否被请求停止
+
+        Returns:
+            是否应该停止扫描
+        """
+        if self._stopped:
+            return True
+            
+        if not self.task_id:
+            return False
+            
+        try:
+            with get_db_context() as db:
+                task = db.query(ScanHistory).filter_by(id=self.task_id).first()
+                if task:
+                    # 检查任务状态
+                    if hasattr(task, "status") and task.status == "stopping":
+                        self._stopped = True
+                        logger.info(f"检测到停止请求: task_id={self.task_id}")
+                        return True
+                    # 检查任务是否已完成
+                    if task.completed_at:
+                        self._stopped = True
+                        logger.info(f"检测到任务已完成: task_id={self.task_id}")
+                        return True
+        except Exception as e:
+            logger.error(f"检查停止状态失败: {e}")
+            
+        return False
+
+    def should_ignore_file(self, path: Path) -> bool:
+        """
+        检查文件是否应该被忽略
+
+        Args:
+            path: 文件路径
+
+        Returns:
+            是否应该忽略该文件
+        """
+        # 检查用户配置的忽略模式
+        if self.ignore_patterns:
+            import fnmatch
+            file_name = path.name
+
+            # 检查每个忽略模式
+            for pattern in self.ignore_patterns:
+                if fnmatch.fnmatch(file_name, pattern):
+                    logger.debug(f"文件匹配用户忽略模式: {file_name} -> {pattern}")
+                    return True
+
+        # 检查是否为关键词库文件（跳过词库文件）
+        if self._is_keyword_library_file(path):
+            logger.debug(f"跳过关键词库文件: {path.name}")
+            return True
+
+        return False
+
+    def _is_keyword_library_file(self, path: Path) -> bool:
+        """
+        检查是否为关键词库文件
+
+        Args:
+            path: 文件路径
+
+        Returns:
+            是否为关键词库文件
+        """
+        # 关键词库文件特征
+        keyword_library_patterns = [
+            'keywords',
+            'keyword_',
+            'key_',
+            'library',
+            'lib_',
+            'rules',
+            'rule_',
+            'mapping',
+            'map_',
+            'season',
+            'episode',
+            'naming',
+            'name_'
+        ]
+
+        file_name_lower = path.stem.lower()
+
+        # 检查文件名是否包含关键词库特征
+        for pattern in keyword_library_patterns:
+            if pattern in file_name_lower:
+                return True
+
+        return False
 
     async def _update_progress(self, current_file: str = None, force: bool = False):
         """
@@ -231,11 +330,27 @@ class FileScanner:
         
         # 扫描文件
         for file_path in files:
+            # 检查停止状态
+            if self._check_stop_status():
+                logger.info(f"扫描被停止，退出扫描循环: task_id={self.task_id}")
+                break
+                
             if not file_path.is_file():
+                continue
+
+            # 检查是否应该忽略该文件
+            if self.should_ignore_file(file_path):
+                self.skipped_files += 1
+                logger.debug(f"跳过忽略文件: {file_path.name}")
                 continue
 
             # 更新当前文件
             await self._update_progress(current_file=str(file_path))
+
+            # 再次检查停止状态（在处理文件前）
+            if self._check_stop_status():
+                logger.info(f"扫描被停止，跳过当前文件: {file_path.name}")
+                break
 
             # 处理媒体文件
             if self.is_media_file(file_path):
@@ -248,11 +363,15 @@ class FileScanner:
         end_time = datetime.now()
         duration = int((end_time - start_time).total_seconds())
 
+        # 确定最终状态
+        final_status = "stopped" if self._stopped else "completed"
+        error_message = "任务被用户停止" if self._stopped else None
+
         # 更新最终进度
         final_progress = {
             "batch_id": self.batch_id,
             "task_id": self.task_id,
-            "status": "completed",
+            "status": final_status,
             "total_files": self.total_files,
             "scanned_files": len(self.scanned_files),
             "new_files": len(self.new_files),
@@ -260,7 +379,7 @@ class FileScanner:
             "skipped_files": self.skipped_files,
             "failed_files": len(self.failed_files),
             "current_file": None,
-            "progress": 100
+            "progress": len(self.scanned_files) / self.total_files * 100 if self.total_files > 0 else 0
         }
         
         # 更新进度数据库
@@ -354,7 +473,7 @@ class FileScanner:
 
         Args:
             file_path: 媒体文件路径
-            scan_type: 扫描类型 (full/incremental/rescan)
+            scan_type: 扫描类型 (full/incremental/rescan/custom)
         """
         try:
             self.scanned_files.add(file_path)
@@ -382,6 +501,12 @@ class FileScanner:
                     file_path=file_data['file_path']
                 ).first()
 
+                # skip_mode为"record"时，跳过已扫描的文件
+                if self.skip_mode == 'record' and existing_file and scan_type != 'rescan':
+                    self.skipped_files += 1
+                    logger.debug(f"跳过已扫描文件（record模式）: {file_path.name}")
+                    return
+
                 if existing_file:
                     # 重新扫描：强制更新文件，不进行任何跳过检查
                     if scan_type == 'rescan':
@@ -401,15 +526,30 @@ class FileScanner:
                         if (existing_file.modify_time == file_data['modify_time'] and
                             existing_file.file_size == file_data['file_size']):
                             self.skipped_files += 1
+                            logger.debug(f"文件未变化，跳过: {file_path.name}")
                             return
 
-                    # 计算哈希值进行精确比对
+                    # 全量扫描或自定义路径扫描：强制更新数据库
+                    if scan_type == 'full' or scan_type == 'custom':
+                        # 强制更新文件元数据和扫描时间
+                        for key, value in file_data.items():
+                            if hasattr(existing_file, key):
+                                setattr(existing_file, key, value)
+                        existing_file.updated_at = datetime.now()
+                        existing_file.scanned_at = datetime.now()  # 更新扫描时间
+                        self.updated_files.append(file_data)
+                        logger.debug(f"强制更新文件: {file_path.name} (扫描类型: {scan_type})")
+                        db.commit()
+                        return
+
+                    # 其他情况：计算哈希值进行精确比对
                     file_hash = self.calculate_file_hash(file_path)
                     if file_hash:
                         file_data['sha256_hash'] = file_hash
 
                         if existing_file.sha256_hash == file_hash:
                             self.skipped_files += 1
+                            logger.debug(f"文件哈希未变化，跳过: {file_path.name}")
                             return
 
                     # 文件已更新

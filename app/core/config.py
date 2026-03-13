@@ -68,6 +68,12 @@ class ScannerConfig(BaseModel):
     watch_paths: list = Field(default_factory=lambda: ["D:/Downloads"])
     recursive: bool = True
     interval: int = Field(default=300, ge=300, le=600, description="扫描间隔（秒），最小300秒，最大600秒")
+    
+    # 默认扫描策略配置
+    default_scan_type: str = "full"  # full/incremental
+    default_recursive: bool = True
+    default_skip_mode: str = "keyword"  # keyword/record/none
+    default_ignore_patterns: list = Field(default_factory=list)
 
     class Monitoring(BaseModel):
         enabled: bool = True
@@ -264,6 +270,40 @@ class ConfigManager:
         if self._config is None:
             self.load()
         return self._config
+
+    def get(self, section: str, default: Any = None) -> Any:
+        """获取配置项
+        
+        Args:
+            section: 配置节名称，如 "scanner", "database"
+            default: 默认值
+            
+        Returns:
+            配置值
+        """
+        config = self.config
+        if hasattr(config, section):
+            section_config = getattr(config, section)
+            if hasattr(section_config, "model_dump"):
+                return section_config.model_dump(mode='json')
+            return section_config
+        return default
+
+    def set(self, section: str, value: Any) -> None:
+        """设置配置项
+        
+        Args:
+            section: 配置节名称，如 "scanner", "database"
+            value: 配置值
+        """
+        config = self.config
+        if hasattr(config, section):
+            if isinstance(value, dict):
+                section_class = type(getattr(config, section))
+                setattr(config, section, section_class(**value))
+            else:
+                setattr(config, section, value)
+            self.save(config)
 
 
 # 全局配置管理器实例

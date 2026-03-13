@@ -127,10 +127,28 @@ class ScanPath(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     path = Column(String(500), unique=True, nullable=False, index=True)
-    recursive = Column(Boolean, nullable=True, default=True)
+    path_name = Column(String(100), nullable=True)  # 路径名称，便于识别
     enabled = Column(Boolean, nullable=True, default=True, index=True)
+
+    # 扫描策略配置
+    scan_type = Column(String(20), nullable=False, default="incremental")  # full/incremental
+    recursive = Column(Boolean, nullable=True, default=True)
+    scan_interval = Column(Integer, nullable=True, default=300)  # 扫描间隔（秒）
+
+    # 监控配置
+    monitoring_enabled = Column(Boolean, nullable=True, default=True)  # 是否启用监控
+    monitoring_debounce = Column(Integer, nullable=True, default=5)  # 防抖延迟（秒）
+
+    # 忽略配置
+    ignore_patterns = Column(JSON, nullable=True)  # 忽略文件模式列表
+
+    # 扫描历史
     last_scan_at = Column(DateTime, nullable=True)
     last_scan_batch_id = Column(String(36), nullable=True)
+    total_scans = Column(Integer, nullable=True, default=0)  # 总扫描次数
+    total_files_found = Column(Integer, nullable=True, default=0)  # 总发现文件数
+
+    # 时间戳
     created_at = Column(DateTime, nullable=True, default=datetime.now)
     updated_at = Column(DateTime, nullable=True, default=datetime.now, onupdate=datetime.now)
 
@@ -151,6 +169,7 @@ class ScanProgress(Base):
     updated_files = Column(Integer, nullable=True, default=0)
     skipped_files = Column(Integer, nullable=True, default=0)
     failed_files = Column(Integer, nullable=True, default=0)
+    progress = Column(Float, nullable=True, default=0)  # 扫描进度百分比 (0-100)
     current_file = Column(String(500), nullable=True)
     started_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)

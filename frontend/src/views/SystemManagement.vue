@@ -58,6 +58,91 @@
       </el-col>
     </el-row>
 
+    <!-- 扫描任务调度器 -->
+    <el-card class="scheduler-card mt-16">
+      <template #header>
+        <div class="card-header">
+          <span class="title">扫描任务调度器</span>
+          <div>
+            <el-tag v-if="schedulerStatus.is_running" type="success">运行中</el-tag>
+            <el-tag v-else type="danger">已停止</el-tag>
+            <el-button :icon="Refresh" class="ml-2" @click="loadSchedulerStatus">刷新</el-button>
+          </div>
+        </div>
+      </template>
+      <el-descriptions :column="2" border>
+        <el-descriptions-item label="运行状态">
+          <el-tag :type="schedulerStatus.is_running ? 'success' : 'danger'">
+            {{ schedulerStatus.is_running ? '运行中' : '已停止' }}
+          </el-tag>
+        </el-descriptions-item>
+        <el-descriptions-item label="定时任务数">
+          {{ schedulerStatus.total_jobs || 0 }} 个
+        </el-descriptions-item>
+      </el-descriptions>
+      <div class="scheduler-actions mt-16">
+        <el-button v-if="!schedulerStatus.is_running" type="success" :icon="VideoPlay" @click="handleStartScheduler">
+          启动调度器
+        </el-button>
+        <el-button v-else type="danger" :icon="VideoPause" @click="handleStopScheduler">
+          停止调度器
+        </el-button>
+      </div>
+      <el-divider />
+      <el-table :data="schedulerStatus.jobs" style="width: 100%" max-height="300">
+        <el-table-column prop="id" label="任务ID" width="150" />
+        <el-table-column prop="name" label="任务名称" min-width="200" />
+        <el-table-column prop="next_run_time" label="下次运行时间" min-width="180">
+          <template #default="{ row }">
+            {{ row.next_run_time || '-' }}
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-card>
+
+    <!-- 文件系统监控 -->
+    <el-card class="monitoring-card mt-16">
+      <template #header>
+        <div class="card-header">
+          <span class="title">文件系统监控</span>
+          <el-button :icon="Refresh" @click="loadMonitoringStatus">刷新</el-button>
+        </div>
+      </template>
+      <el-table :data="monitoringList" v-loading="monitoringLoading" style="width: 100%">
+        <el-table-column prop="path_id" label="路径ID" width="100" />
+        <el-table-column prop="path" label="监控路径" min-width="200" show-overflow-tooltip />
+        <el-table-column prop="monitoring_enabled" label="启用监控" width="120">
+          <template #default="{ row }">
+            <el-tag :type="row.monitoring_enabled ? 'success' : 'info'">
+              {{ row.monitoring_enabled ? '启用' : '禁用' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="is_running" label="运行状态" width="120">
+          <template #default="{ row }">
+            <el-tag v-if="row.is_running && row.is_alive" type="success">运行中</el-tag>
+            <el-tag v-else-if="row.is_running && !row.is_alive" type="warning">异常</el-tag>
+            <el-tag v-else type="info">未运行</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="monitoring_debounce" label="防抖(秒)" width="100">
+          <template #default="{ row }">
+            {{ row.monitoring_debounce }} 秒
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="150" fixed="right">
+          <template #default="{ row }">
+            <el-button v-if="!row.is_running" link type="primary" @click="handleStartMonitoring(row)">
+              启动
+            </el-button>
+            <el-button v-else link type="danger" @click="handleStopMonitoring(row)">
+              停止
+            </el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-card>
+
     <!-- 配置管理 -->
     <el-card class="config-card mt-16">
       <template #header>
@@ -85,6 +170,24 @@
                 </el-tooltip>
               </template>
               <el-input-number v-model="config.scan.interval" :min="300" :max="600" />
+            </el-form-item>
+            <el-form-item>
+              <template #label>
+                <span>启用文件系统监控</span>
+                <el-tooltip content="是否启用文件系统实时监控，启用后会自动监控文件变化并触发扫描" placement="top">
+                  <el-icon class="ml-2"><QuestionFilled /></el-icon>
+                </el-tooltip>
+              </template>
+              <el-switch v-model="config.scan.monitoringEnabled" />
+            </el-form-item>
+            <el-form-item>
+              <template #label>
+                <span>监控防抖延迟(秒)</span>
+                <el-tooltip content="文件变化后等待多少秒再触发扫描，避免频繁扫描" placement="top">
+                  <el-icon class="ml-2"><QuestionFilled /></el-icon>
+                </el-tooltip>
+              </template>
+              <el-input-number v-model="config.scan.monitoringDebounce" :min="1" :max="60" />
             </el-form-item>
             <el-form-item>
               <template #label>
@@ -219,6 +322,8 @@ const config = reactive({
   scan: {
     recursive: true,
     interval: 300,
+    monitoringEnabled: true,
+    monitoringDebounce: 5,
     paths: ''
   },
   recognition: {
@@ -554,6 +659,8 @@ const handleSaveConfig = async (type) => {
     if (type === 'scan') {
       await updateConfigValue('scan.recursive', config.scan.recursive)
       await updateConfigValue('scan.interval', config.scan.interval)
+      await updateConfigValue('scan.monitoring.enabled', config.scan.monitoringEnabled)
+      await updateConfigValue('scan.monitoring.debounce_seconds', config.scan.monitoringDebounce)
       await updateConfigValue('scan.paths', config.scan.paths.split('\n'))
     } else if (type === 'recognition') {
       await updateConfigValue('recognition.mode', config.recognition.mode)
@@ -568,6 +675,134 @@ const handleSaveConfig = async (type) => {
   } catch (error) {
     console.error('保存配置失败:', error)
     ElMessage.error('保存配置失败')
+  }
+}
+
+// ========== 扫描任务调度器管理 ==========
+
+const schedulerStatus = ref({
+  is_running: false,
+  jobs: [],
+  total_jobs: 0
+})
+
+// 加载调度器状态
+const loadSchedulerStatus = async () => {
+  try {
+    const { getSchedulerStatus } = await import('@/api/scan')
+    const res = await getSchedulerStatus()
+    schedulerStatus.value = res
+  } catch (error) {
+    console.error('加载调度器状态失败:', error)
+    ElMessage.error('加载调度器状态失败')
+  }
+}
+
+// 启动调度器
+const handleStartScheduler = async () => {
+  try {
+    await ElMessageBox.confirm('确定要启动扫描任务调度器吗？', '提示', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'info'
+    })
+
+    const { startScheduler } = await import('@/api/scan')
+    await startScheduler()
+
+    ElMessage.success('调度器已启动')
+    loadSchedulerStatus()
+  } catch (error) {
+    if (error !== 'cancel') {
+      console.error('启动调度器失败:', error)
+      ElMessage.error('启动调度器失败')
+    }
+  }
+}
+
+// 停止调度器
+const handleStopScheduler = async () => {
+  try {
+    await ElMessageBox.confirm('确定要停止扫描任务调度器吗？', '提示', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning'
+    })
+
+    const { stopScheduler } = await import('@/api/scan')
+    await stopScheduler()
+
+    ElMessage.success('调度器已停止')
+    loadSchedulerStatus()
+  } catch (error) {
+    if (error !== 'cancel') {
+      console.error('停止调度器失败:', error)
+      ElMessage.error('停止调度器失败')
+    }
+  }
+}
+
+// ========== 文件系统监控管理 ==========
+
+const monitoringList = ref([])
+const monitoringLoading = ref(false)
+
+// 加载监控状态
+const loadMonitoringStatus = async () => {
+  monitoringLoading.value = true
+  try {
+    const { listMonitoringStatus } = await import('@/api/scan')
+    const res = await listMonitoringStatus()
+    monitoringList.value = res.items || []
+  } catch (error) {
+    console.error('加载监控状态失败:', error)
+    ElMessage.error('加载监控状态失败')
+  } finally {
+    monitoringLoading.value = false
+  }
+}
+
+// 启动监控
+const handleStartMonitoring = async (row) => {
+  try {
+    await ElMessageBox.confirm(`确定要启动路径 "${row.path}" 的文件监控吗？`, '提示', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'info'
+    })
+
+    const { startMonitoring } = await import('@/api/scan')
+    await startMonitoring(row.path_id)
+
+    ElMessage.success('文件监控已启动')
+    loadMonitoringStatus()
+  } catch (error) {
+    if (error !== 'cancel') {
+      console.error('启动监控失败:', error)
+      ElMessage.error('启动监控失败')
+    }
+  }
+}
+
+// 停止监控
+const handleStopMonitoring = async (row) => {
+  try {
+    await ElMessageBox.confirm(`确定要停止路径 "${row.path}" 的文件监控吗？`, '提示', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning'
+    })
+
+    const { stopMonitoring } = await import('@/api/scan')
+    await stopMonitoring(row.path_id)
+
+    ElMessage.success('文件监控已停止')
+    loadMonitoringStatus()
+  } catch (error) {
+    if (error !== 'cancel') {
+      console.error('停止监控失败:', error)
+      ElMessage.error('停止监控失败')
+    }
   }
 }
 
@@ -603,6 +838,8 @@ const startResourceMonitor = () => {
 
 onMounted(() => {
   loadProcessStatus()
+  loadSchedulerStatus()
+  loadMonitoringStatus()
   initResourceCharts()
   updateResourceCharts()
   startResourceMonitor()

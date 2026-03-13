@@ -113,3 +113,141 @@ export function retryScanTask(taskId) {
 export function deleteScanTask(taskId) {
   return request.delete(`/scan/tasks/${taskId}`)
 }
+
+/**
+ * 批量停止扫描任务
+ * @param {Array<number>} taskIds - 任务ID列表
+ * @returns {Promise}
+ */
+export function batchStopTasks(taskIds) {
+  return request.post('/scan/tasks/batch/stop', { task_ids: taskIds })
+}
+
+/**
+ * 批量删除扫描任务
+ * @param {Array<number>} taskIds - 任务ID列表
+ * @returns {Promise}
+ */
+export function batchDeleteTasks(taskIds) {
+  return request.delete('/scan/tasks/batch', { data: { task_ids: taskIds } })
+}
+
+/**
+ * 浏览目录
+ * @param {string} path - 要浏览的目录路径
+ * @returns {Promise}
+ */
+export function browseDirectory(path) {
+  return request.get('/scan/browse', { params: { path } })
+}
+
+// ========== 默认扫描策略 ==========
+
+/**
+ * 获取默认扫描策略配置
+ * @returns {Promise}
+ * @example
+ * // 返回数据示例：
+ * // {
+ * //   default_scan_type: "full",
+ * //   default_recursive: true,
+ * //   default_skip_mode: "keyword",
+ * //   default_ignore_patterns: []
+ * // }
+ */
+export function getDefaultScanConfig() {
+  return request.get('/scan/config/default')
+}
+
+/**
+ * 更新默认扫描策略配置
+ * @param {Object} config - 配置对象
+ * @param {string} config.default_scan_type - 默认扫描类型 (full/incremental)
+ * @param {boolean} config.default_recursive - 默认递归扫描
+ * @param {string} config.default_skip_mode - 默认文件跳过模式 (keyword/record/none)
+ * @param {Array<string>} config.default_ignore_patterns - 默认忽略文件模式列表
+ * @returns {Promise}
+ */
+export function updateDefaultScanConfig(config) {
+  return request.put('/scan/config/default', config)
+}
+
+/**
+ * 重置默认扫描策略
+ * @returns {Promise}
+ */
+export function resetDefaultScanConfig() {
+  return request.post('/scan/config/default/reset')
+}
+
+// ========== 文件系统监控 ==========
+
+/**
+ * 启动文件监控
+ * @param {number} pathId - 扫描路径ID
+ * @returns {Promise}
+ */
+export function startMonitoring(pathId) {
+  return request.post(`/scan/monitoring/${pathId}/start`)
+}
+
+/**
+ * 停止文件监控
+ * @param {number} pathId - 扫描路径ID
+ * @returns {Promise}
+ */
+export function stopMonitoring(pathId) {
+  return request.post(`/scan/monitoring/${pathId}/stop`)
+}
+
+/**
+ * 获取文件监控状态
+ * @param {number} pathId - 扫描路径ID
+ * @returns {Promise}
+ */
+export function getMonitoringStatus(pathId) {
+  return request.get(`/scan/monitoring/${pathId}/status`)
+}
+
+/**
+ * 获取所有路径的监控状态
+ * @returns {Promise}
+ */
+export function listMonitoringStatus() {
+  return request.get('/scan/monitoring')
+}
+
+// ========== 扫描任务调度器 ==========
+
+/**
+ * 获取调度器状态
+ * @returns {Promise}
+ */
+export function getSchedulerStatus() {
+  return request.get('/scan/scheduler/status')
+}
+
+/**
+ * 启动调度器
+ * @returns {Promise}
+ */
+export function startScheduler() {
+  return request.post('/scan/scheduler/start')
+}
+
+/**
+ * 停止调度器
+ * @returns {Promise}
+ */
+export function stopScheduler() {
+  return request.post('/scan/scheduler/stop')
+}
+
+/**
+ * 获取指定路径的定时任务状态
+ * @param {number} pathId - 扫描路径ID
+ * @returns {Promise}
+ */
+export function getScheduledJob(pathId) {
+  return request.get(`/scan/scheduler/jobs/${pathId}`)
+}

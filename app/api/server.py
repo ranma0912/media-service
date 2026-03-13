@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from loguru import logger
 
 from app.core.config import config_manager
-from app.api import process, config as config_api, media, scan, recognition, organize, statistics, websocket
+from app.api import process, config as config_api, media, scan, recognition, organize, statistics, websocket, browse
 
 
 @asynccontextmanager
@@ -50,6 +50,7 @@ def create_app() -> FastAPI:
     app.include_router(organize.router, prefix="/api/organize", tags=["整理管理"])
     app.include_router(statistics.router, prefix="/api/statistics", tags=["统计管理"])
     app.include_router(websocket.router, prefix="/api", tags=["WebSocket"])
+    app.include_router(browse.router, prefix="/api", tags=["浏览管理"])
 
     # 健康检查
     @app.get("/health")

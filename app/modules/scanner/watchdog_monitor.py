@@ -130,6 +130,11 @@ class FileSystemMonitor:
             paths: 要监控的路径列表
             scan_callback: 扫描回调函数
         """
+        # 检查是否启用监控
+        if not config_manager.config.scanner.monitoring.enabled:
+            logger.info("文件系统监控未启用，跳过启动")
+            return
+
         if self.is_running:
             logger.warning("文件监控已在运行中")
             return

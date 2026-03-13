@@ -23,12 +23,7 @@ request.interceptors.response.use(
   response => {
     const res = response.data
 
-    // 根据实际API响应格式调整
-    if (res.code !== 0 && res.code !== undefined) {
-      ElMessage.error(res.message || '请求失败')
-      return Promise.reject(new Error(res.message || '请求失败'))
-    }
-
+    // 直接返回后端数据，不检查 code 字段
     return res
   },
   error => {
