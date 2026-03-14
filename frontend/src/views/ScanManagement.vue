@@ -56,6 +56,17 @@
             </div>
           </template>
 
+          <!-- 跨页全选和选中状态 -->
+          <div class="selection-actions" v-if="pagination.total > 0">
+            <el-checkbox v-model="selectAllAcrossPages" @change="handleSelectAllAcrossPages">
+              跨页全选
+            </el-checkbox>
+            <span v-if="allSelectedTaskIds.size > 0" class="selected-count">
+              已选中 {{ allSelectedTaskIds.size }} / {{ pagination.total }} 个文件
+              <span v-if="selectAllAcrossPages" class="warning-text">（跨页全选可能会占用较多系统资源，建议分批操作）</span>
+            </span>
+          </div>
+
           <el-table
             v-loading="loading"
             :data="fileTaskList"
@@ -92,12 +103,26 @@
             <el-table-column label="操作" width="200" fixed="right">
               <template #default="{ row }">
                 <el-button link type="primary" @click="handleViewFileTask(row)">查看结果</el-button>
+                <el-button v-if="row.status === 'scanning'" link type="warning" @click="handleViewProgress(row)">查看进度</el-button>
                 <el-button v-if="row.status === 'scanned'" link type="success" @click="handleRescanFile(row)">重新扫描</el-button>
                 <el-button v-if="row.status === 'scanning'" link type="danger" @click="handleStopFileScan(row)">停止</el-button>
                 <el-button v-if="row.status === 'scanned'" link type="danger" @click="handleDeleteFileScanResult(row)">删除</el-button>
               </template>
             </el-table-column>
           </el-table>
+          
+          <!-- 分页 -->
+          <div class="pagination" v-if="pagination.total > 0">
+            <el-pagination
+              v-model:current-page="pagination.page"
+              v-model:page-size="pagination.size"
+              :total="pagination.total"
+              :page-sizes="[20, 50, 100]"
+              layout="total, sizes, prev, pager, next, jumper"
+              @size-change="loadFileTasks"
+              @current-change="loadFileTasks"
+            />
+          </div>
         </el-card>
       </el-tab-pane>
     </el-tabs>
@@ -209,9 +234,13 @@
         </el-form-item>
         <el-form-item label="监控模式">
           <el-select v-model="pathForm.monitoring_mode" placeholder="选择监控模式" style="width: 100%">
-            <el-option label="Watchdog" value="watchdog" />
-            <el-option label="Polling" value="polling" />
+            <el-option label="文件变化(Watchdog)" value="watchdog" />
+            <el-option label="定时轮询(Polling)" value="polling" />
           </el-select>
+        </el-form-item>
+        <el-form-item v-if="pathForm.monitoring_mode === 'polling'" label="轮询间隔(秒)">
+          <el-input-number v-model="pathForm.polling_interval" :min="60" :max="3600" />
+          <div class="form-item-tip">定时轮询模式下，系统将按此间隔周期性检查文件变化</div>
         </el-form-item>
         <el-form-item label="监控防抖(秒)">
           <el-input-number v-model="pathForm.monitoring_debounce" :min="1" :max="60" />
@@ -426,6 +455,58 @@
         </div>
       </div>
     </el-dialog>
+
+    <!-- 扫描进度对话框 -->
+    <el-dialog
+      v-model="scanProgressDialogVisible"
+      title="扫描进度"
+      width="700px"
+      @close="stopProgressMonitoring"
+    >
+      <div v-if="scanProgress" class="scan-progress-dialog">
+        <el-descriptions :column="2" border>
+          <el-descriptions-item label="任务ID">{{ scanProgress.task_id }}</el-descriptions-item>
+          <el-descriptions-item label="批次ID">{{ scanProgress.batch_id }}</el-descriptions-item>
+          <el-descriptions-item label="目标路径" :span="2">{{ scanProgress.target_path }}</el-descriptions-item>
+          <el-descriptions-item label="扫描类型">{{ scanProgress.scan_type }}</el-descriptions-item>
+          <el-descriptions-item label="状态">
+            <el-tag v-if="scanProgress.status === 'pending'" type="info">等待中</el-tag>
+            <el-tag v-else-if="scanProgress.status === 'running'" type="warning">扫描中</el-tag>
+            <el-tag v-else-if="scanProgress.status === 'completed'" type="success">已完成</el-tag>
+            <el-tag v-else-if="scanProgress.status === 'failed'" type="danger">失败</el-tag>
+            <el-tag v-else-if="scanProgress.status === 'stopped'" type="info">已停止</el-tag>
+            <el-tag v-else type="info">{{ scanProgress.status }}</el-tag>
+          </el-descriptions-item>
+          <el-descriptions-item label="总文件数">{{ scanProgress.total_files }}</el-descriptions-item>
+          <el-descriptions-item label="已扫描">{{ scanProgress.scanned_files }}</el-descriptions-item>
+          <el-descriptions-item label="新文件">{{ scanProgress.new_files }}</el-descriptions-item>
+          <el-descriptions-item label="更新文件">{{ scanProgress.updated_files }}</el-descriptions-item>
+          <el-descriptions-item label="跳过文件">{{ scanProgress.skipped_files }}</el-descriptions-item>
+          <el-descriptions-item label="失败文件">{{ scanProgress.failed_files }}</el-descriptions-item>
+          <el-descriptions-item label="进度" :span="2">
+            <el-progress
+              :percentage="scanProgress.progress || 0"
+              :status="(scanProgress.progress || 0) >= 100 ? 'success' : ''"
+            />
+          </el-descriptions-item>
+          <el-descriptions-item v-if="scanProgress.current_file" label="当前文件" :span="2">
+            {{ scanProgress.current_file }}
+          </el-descriptions-item>
+          <el-descriptions-item v-if="scanProgress.started_at" label="开始时间">
+            {{ scanProgress.started_at }}
+          </el-descriptions-item>
+          <el-descriptions-item v-if="scanProgress.completed_at" label="完成时间">
+            {{ scanProgress.completed_at }}
+          </el-descriptions-item>
+          <el-descriptions-item v-if="scanProgress.last_updated_at" label="最后更新">
+            {{ scanProgress.last_updated_at }}
+          </el-descriptions-item>
+        </el-descriptions>
+      </div>
+      <div v-else class="no-progress">
+        <el-empty description="暂无进度信息" />
+      </div>
+    </el-dialog>
   </div>
 </template>
 
@@ -447,8 +528,10 @@ import {
   getScanResult,
   batchRescanMediaFiles,
   batchStopMediaFileScans,
-  batchDeleteMediaFileScanResults
+  batchDeleteMediaFileScanResults,
+  getScanProgress
 } from '@/api/scan'
+import WebSocketClient from '@/utils/websocket'
 
 // 加载状态
 const loading = ref(false)
@@ -459,11 +542,24 @@ const activeTab = ref('fileTasks')
 // 文件任务列表
 const fileTaskList = ref([])
 
+// 分页信息
+const pagination = reactive({
+  page: 1,
+  size: 20,
+  total: 0
+})
+
 // 文件任务状态筛选
 const fileTaskStatusFilter = ref('')
 
 // 选中的文件任务
 const selectedFileTasks = ref([])
+
+// 跨页全选状态
+const selectAllAcrossPages = ref(false)
+
+// 所有选中的任务ID集合
+const allSelectedTaskIds = ref(new Set())
 
 // 扫描路径列表
 const pathList = ref([])
@@ -471,6 +567,12 @@ const pathList = ref([])
 // 扫描结果详情
 const scanResultDetail = ref(null)
 const scanResultDialogVisible = ref(false)
+
+// 扫描进度
+const scanProgress = ref(null)
+const scanProgressDialogVisible = ref(false)
+const progressWebSocket = ref(null)
+const progressUpdateInterval = ref(null)
 
 // 扫描配置对话框
 const configDialogVisible = ref(false)
@@ -496,6 +598,7 @@ const pathForm = reactive({
   monitoring_enabled: false,
   monitoring_mode: 'watchdog',
   monitoring_debounce: 5,
+  polling_interval: 300,
   auto_recognize: false,
   auto_organize: false,
   enabled: true
@@ -539,12 +642,16 @@ const calculateProgress = (task) => {
 const loadFileTasks = async () => {
   loading.value = true
   try {
-    const params = { limit: 50, offset: 0 }
+    const params = { page: pagination.page, page_size: pagination.size }
     if (fileTaskStatusFilter.value) {
       params.status = fileTaskStatusFilter.value
     }
     const tasks = await getFileTasks(params)
-    fileTaskList.value = tasks || []
+    fileTaskList.value = tasks.items || []
+    pagination.total = tasks.total || 0
+    
+    // 更新当前页的选中状态
+    updateCurrentPageSelection()
   } catch (error) {
     console.error('加载文件任务失败:', error)
     ElMessage.error('加载文件任务失败')
@@ -566,6 +673,73 @@ const loadPaths = async () => {
 // 文件任务选择变化
 const handleFileTaskSelectionChange = (selection) => {
   selectedFileTasks.value = selection
+  
+  // 更新所有选中的任务ID
+  // 先移除当前页的任务ID
+  fileTaskList.value.forEach(task => {
+    allSelectedTaskIds.value.delete(task.id)
+  })
+  
+  // 再添加当前页选中的任务ID
+  selection.forEach(task => {
+    allSelectedTaskIds.value.add(task.id)
+  })
+  
+  // 更新跨页全选状态
+  selectAllAcrossPages.value = allSelectedTaskIds.value.size > 0 && 
+    allSelectedTaskIds.value.size === fileTaskList.value.length && 
+    fileTaskList.value.length === pagination.total
+}
+
+// 跨页全选处理
+const handleSelectAllAcrossPages = async () => {
+  if (selectAllAcrossPages.value) {
+    // 跨页全选：获取所有页的数据
+    loading.value = true
+    let currentPage = 1
+    const pageSize = 100 // 使用较大的页面大小减少请求次数
+    
+    try {
+      while (currentPage <= Math.ceil(pagination.total / pageSize)) {
+        const params = { page: currentPage, page_size: pageSize }
+        if (fileTaskStatusFilter.value) {
+          params.status = fileTaskStatusFilter.value
+        }
+        const tasks = await getFileTasks(params)
+        
+        // 添加所有任务ID到选中集合
+        tasks.items.forEach(task => {
+          allSelectedTaskIds.value.add(task.id)
+        })
+        
+        currentPage++
+      }
+      
+      // 更新当前页的选中状态
+      updateCurrentPageSelection()
+      
+      ElMessage.success(`已选中 ${allSelectedTaskIds.value.size} 个文件`)
+    } catch (error) {
+      console.error('跨页全选失败:', error)
+      ElMessage.error('跨页全选失败')
+      selectAllAcrossPages.value = false
+    } finally {
+      loading.value = false
+    }
+  } else {
+    // 取消跨页全选
+    allSelectedTaskIds.value.clear()
+    selectedFileTasks.value = []
+  }
+}
+
+// 更新当前页的选中状态
+const updateCurrentPageSelection = () => {
+  // 根据已选中的ID列表更新当前页的选中状态
+  const selectedOnCurrentPage = fileTaskList.value.filter(task => 
+    allSelectedTaskIds.value.has(task.id)
+  )
+  selectedFileTasks.value = selectedOnCurrentPage
 }
 
 // 立即扫描
@@ -729,14 +903,14 @@ const handleDeleteFileScanResult = async (row) => {
 
 // 批量重新扫描文件
 const handleBatchRescanFiles = async () => {
-  if (selectedFileTasks.value.length === 0) {
+  if (allSelectedTaskIds.value.size === 0) {
     ElMessage.warning('请先选择要重新扫描的文件')
     return
   }
 
   try {
     await ElMessageBox.confirm(
-      `确定要重新扫描选中的 ${selectedFileTasks.value.length} 个文件吗？\n系统将自动删除这些文件的所有扫描记录并重新建立扫描任务。`,
+      `确定要重新扫描选中的 ${allSelectedTaskIds.value.size} 个文件吗？\n系统将自动删除这些文件的所有扫描记录并重新建立扫描任务。`,
       '批量重新扫描确认',
       {
         confirmButtonText: '确定',
@@ -746,12 +920,13 @@ const handleBatchRescanFiles = async () => {
     )
 
     // 提取media_file_id
-    const mediaFileIds = selectedFileTasks.value
+    const mediaFileIds = fileTaskList.value
+      .filter(t => allSelectedTaskIds.value.has(t.id))
       .map(t => t.media_file_id)
       .filter(id => id !== undefined && id !== null && !isNaN(id))
       .map(id => parseInt(id, 10))
 
-    console.log('选中的文件任务:', selectedFileTasks.value)
+    console.log('选中的文件任务:', allSelectedTaskIds.value)
     console.log('提取的media_file_ids:', mediaFileIds)
     
     if (mediaFileIds.length === 0) {
@@ -763,9 +938,20 @@ const handleBatchRescanFiles = async () => {
     const result = await batchRescanMediaFiles(mediaFileIds)
     console.log('批量重新扫描结果:', result)
     
-    ElMessage.success(`批量重新扫描完成：成功 ${result.success} 个，失败 ${result.failed} 个`)
-    selectedFileTasks.value = []
-    loadFileTasks()
+    // 等待后台确认批量重扫描成功
+    if (result.success > 0) {
+      ElMessage.success(`批量重新扫描完成：成功 ${result.success} 个，失败 ${result.failed} 个`)
+      allSelectedTaskIds.value.clear()
+      selectedFileTasks.value = []
+      selectAllAcrossPages.value = false
+      
+      // 后台确认成功后刷新列表
+      setTimeout(() => {
+        loadFileTasks()
+      }, 1500)
+    } else {
+      ElMessage.warning(`批量重新扫描完成，但没有成功创建任何任务：失败 ${result.failed} 个`)
+    }
   } catch (error) {
     if (error !== 'cancel') {
     console.error('批量重新扫描失败:', error)
@@ -805,14 +991,14 @@ const handleBatchRescanFiles = async () => {
 
 // 批量停止文件扫描
 const handleBatchStopFileScans = async () => {
-  if (selectedFileTasks.value.length === 0) {
+  if (allSelectedTaskIds.value.size === 0) {
     ElMessage.warning('请先选择要停止的文件')
     return
   }
 
   try {
     await ElMessageBox.confirm(
-      `确定要停止选中的 ${selectedFileTasks.value.length} 个文件的扫描吗？\n停止后将自动删除这些文件的所有扫描记录。`,
+      `确定要停止选中的 ${allSelectedTaskIds.value.size} 个文件的扫描吗？\n停止后将自动删除这些文件的所有扫描记录。`,
       '批量停止确认',
       {
         confirmButtonText: '确定',
@@ -822,7 +1008,8 @@ const handleBatchStopFileScans = async () => {
     )
 
     // 提取media_file_id
-    const mediaFileIds = selectedFileTasks.value
+    const mediaFileIds = fileTaskList.value
+      .filter(t => allSelectedTaskIds.value.has(t.id))
       .map(t => t.media_file_id)
       .filter(id => id !== undefined && id !== null && !isNaN(id))
       .map(id => parseInt(id, 10))
@@ -834,7 +1021,9 @@ const handleBatchStopFileScans = async () => {
 
     const result = await batchStopMediaFileScans(mediaFileIds)
     ElMessage.success(`批量停止完成：成功 ${result.success} 个，失败 ${result.failed} 个`)
+    allSelectedTaskIds.value.clear()
     selectedFileTasks.value = []
+    selectAllAcrossPages.value = false
     loadFileTasks()
   } catch (error) {
     if (error !== 'cancel') {
@@ -846,13 +1035,15 @@ const handleBatchStopFileScans = async () => {
 
 // 批量删除扫描结果
 const handleBatchDeleteFileScanResults = async () => {
-  if (selectedFileTasks.value.length === 0) {
+  if (allSelectedTaskIds.value.size === 0) {
     ElMessage.warning('请先选择要删除的文件')
     return
   }
 
   // 检查是否有未完成的文件
-  const uncompletedTasks = selectedFileTasks.value.filter(t => t.status !== 'scanned')
+  const uncompletedTasks = fileTaskList.value.filter(t => 
+    allSelectedTaskIds.value.has(t.id) && t.status !== 'scanned'
+  )
   if (uncompletedTasks.length > 0) {
     ElMessage.warning('选中的文件中有未完成扫描的文件，无法删除')
     return
@@ -860,7 +1051,7 @@ const handleBatchDeleteFileScanResults = async () => {
 
   try {
     await ElMessageBox.confirm(
-      `确定要删除选中的 ${selectedFileTasks.value.length} 个文件的扫描结果吗？此操作不可恢复！`,
+      `确定要删除选中的 ${allSelectedTaskIds.value.size} 个文件的扫描结果吗？此操作不可恢复！`,
       '批量删除确认',
       {
         confirmButtonText: '确定删除',
@@ -870,7 +1061,8 @@ const handleBatchDeleteFileScanResults = async () => {
     )
 
     // 提取media_file_id
-    const mediaFileIds = selectedFileTasks.value
+    const mediaFileIds = fileTaskList.value
+      .filter(t => allSelectedTaskIds.value.has(t.id))
       .map(t => t.media_file_id)
       .filter(id => id !== undefined && id !== null && !isNaN(id))
       .map(id => parseInt(id, 10))
@@ -882,7 +1074,9 @@ const handleBatchDeleteFileScanResults = async () => {
 
     const result = await batchDeleteMediaFileScanResults(mediaFileIds)
     ElMessage.success(`批量删除完成：成功 ${result.success} 个，失败 ${result.failed} 个`)
+    allSelectedTaskIds.value.clear()
     selectedFileTasks.value = []
+    selectAllAcrossPages.value = false
     loadFileTasks()
   } catch (error) {
     if (error !== 'cancel') {
@@ -930,6 +1124,7 @@ const handleEditPath = (row) => {
     monitoring_enabled: row.monitoring_enabled,
     monitoring_mode: row.monitoring_mode,
     monitoring_debounce: row.monitoring_debounce,
+    polling_interval: row.polling_interval || 300,
     auto_recognize: row.auto_recognize,
     auto_organize: row.auto_organize,
     enabled: row.enabled
@@ -1147,9 +1342,71 @@ const refreshInterval = setInterval(() => {
   }
 }, 5000)
 
+// 开始监控扫描进度
+const startProgressMonitoring = (taskId) => {
+  // 关闭之前的连接
+  stopProgressMonitoring()
+
+  // 创建WebSocket连接
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  const host = window.location.host
+  const wsUrl = `${protocol}//${host}/ws/scan/${taskId}`
+
+  progressWebSocket.value = new WebSocketClient(wsUrl)
+
+  // 监听消息
+  progressWebSocket.value.on('message', (data) => {
+    if (data) {
+      scanProgress.value = data
+    }
+  })
+
+  // 监听错误
+  progressWebSocket.value.on('error', (error) => {
+    console.error('WebSocket错误:', error)
+  })
+
+  // 监听断开
+  progressWebSocket.value.on('disconnected', () => {
+    console.log('WebSocket连接已断开')
+  })
+
+  // 定时获取进度（作为备用方案）
+  progressUpdateInterval.value = setInterval(async () => {
+    try {
+      const progress = await getScanProgress(taskId)
+      if (progress) {
+        scanProgress.value = progress
+      }
+    } catch (error) {
+      console.error('获取扫描进度失败:', error)
+    }
+  }, 3000)
+}
+
+// 停止监控扫描进度
+const stopProgressMonitoring = () => {
+  if (progressWebSocket.value) {
+    progressWebSocket.value.close()
+    progressWebSocket.value = null
+  }
+  if (progressUpdateInterval.value) {
+    clearInterval(progressUpdateInterval.value)
+    progressUpdateInterval.value = null
+  }
+  scanProgress.value = null
+}
+
+// 查看扫描进度
+const handleViewProgress = (task) => {
+  scanProgressDialogVisible.value = true
+  startProgressMonitoring(task.id)
+}
+
 // 组件卸载时清理
 onUnmounted(() => {
   clearInterval(refreshInterval)
+  stopProgressMonitoring()
 })
 </script>
 
@@ -1182,6 +1439,33 @@ onUnmounted(() => {
         font-size: 16px;
         font-weight: 500;
       }
+
+      .header-actions {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+    }
+
+    .selection-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 12px;
+      padding: 8px 12px;
+      background: #f5f7fa;
+      border-radius: 4px;
+
+      .selected-count {
+        color: #606266;
+        font-size: 14px;
+
+        .warning-text {
+          color: #f56c6c;
+          margin-left: 8px;
+          font-size: 13px;
+        }
+      }
     }
   }
 
@@ -1189,6 +1473,20 @@ onUnmounted(() => {
     .el-descriptions {
       margin-top: 20px;
     }
+  }
+
+  .scan-progress-dialog {
+    .el-descriptions {
+      margin-top: 20px;
+    }
+
+    .el-progress {
+      margin-top: 8px;
+    }
+  }
+
+  .no-progress {
+    padding: 40px 0;
   }
 
   .directory-browser {

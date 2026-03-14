@@ -69,6 +69,26 @@ class ManualScanResponse(BaseModel):
     message: str
 
 
+class ScanProgressResponse(BaseModel):
+    """扫描进度响应"""
+    task_id: int
+    batch_id: str
+    target_path: str
+    scan_type: str
+    status: str
+    total_files: int
+    scanned_files: int
+    new_files: int
+    updated_files: int
+    skipped_files: int
+    failed_files: int
+    progress: float
+    current_file: Optional[str]
+    started_at: Optional[str]
+    completed_at: Optional[str]
+    last_updated_at: Optional[str]
+
+
 class DefaultScanConfigResponse(BaseModel):
     """默认扫描配置响应"""
     scan_type: str
@@ -97,6 +117,7 @@ class ScanPathConfigResponse(BaseModel):
     monitoring_enabled: bool
     monitoring_mode: Optional[str]
     monitoring_debounce: int
+    polling_interval: int
     auto_recognize: bool
     auto_organize: bool
     ignore_patterns: Optional[List[str]]
@@ -133,6 +154,14 @@ class FileTaskResponse(BaseModel):
     scan_result: Optional[str]
     created_at: str
     updated_at: str
+
+
+class FileTaskListResponse(BaseModel):
+    """文件任务列表响应"""
+    total: int
+    page: int
+    page_size: int
+    items: List[FileTaskResponse]
 
 
 class ScanResultDetailResponse(BaseModel):
@@ -236,6 +265,44 @@ async def trigger_manual_scan(
         logger.error(f"触发扫描失败: {e}")
         raise HTTPException(status_code=500, detail=f"扫描触发失败: {str(e)}")
 
+
+@router.get("/progress/{task_id}", response_model=ScanProgressResponse)
+async def get_scan_progress(task_id: int):
+    """
+    获取扫描任务进度
+
+    - **task_id**: 扫描任务ID
+    """
+    try:
+        with get_db_context() as db:
+            progress = db.query(ScanProgress).filter_by(task_id=task_id).first()
+            if not progress:
+                raise HTTPException(status_code=404, detail="扫描进度不存在")
+
+            return ScanProgressResponse(
+                task_id=progress.task_id,
+                batch_id=progress.batch_id,
+                target_path=progress.target_path,
+                scan_type=progress.scan_type,
+                status=progress.status,
+                total_files=progress.total_files or 0,
+                scanned_files=progress.scanned_files or 0,
+                new_files=progress.new_files or 0,
+                updated_files=progress.updated_files or 0,
+                skipped_files=progress.skipped_files or 0,
+                failed_files=progress.failed_files or 0,
+                progress=progress.progress or 0,
+                current_file=progress.current_file,
+                started_at=progress.started_at.isoformat() if progress.started_at else None,
+                completed_at=progress.completed_at.isoformat() if progress.completed_at else None,
+                last_updated_at=progress.last_updated_at.isoformat() if progress.last_updated_at else None
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取扫描进度失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取扫描进度失败: {str(e)}")
 
 
 # ========== 默认扫描策略配置 ==========
@@ -365,6 +432,7 @@ class ScanPathCreate(BaseModel):
     monitoring_enabled: bool = False
     monitoring_mode: str = "watchdog"
     monitoring_debounce: int = 5
+    polling_interval: int = 300
     auto_recognize: bool = False
     auto_organize: bool = False
     ignore_patterns: Optional[List[str]] = None
@@ -383,6 +451,7 @@ class ScanPathUpdate(BaseModel):
     monitoring_enabled: Optional[bool] = None
     monitoring_mode: Optional[str] = None
     monitoring_debounce: Optional[int] = None
+    polling_interval: Optional[int] = None
     auto_recognize: Optional[bool] = None
     auto_organize: Optional[bool] = None
     ignore_patterns: Optional[List[str]] = None
@@ -418,6 +487,7 @@ async def get_scan_paths(
             monitoring_enabled=path.monitoring_enabled,
             monitoring_mode=path.monitoring_mode,
             monitoring_debounce=path.monitoring_debounce,
+            polling_interval=path.polling_interval,
             auto_recognize=path.auto_recognize,
             auto_organize=path.auto_organize,
             ignore_patterns=path.ignore_patterns,
@@ -672,10 +742,10 @@ async def delete_scan_path(
 # ========== 文件任务管理 ==========
 
 
-@router.get("/file-tasks", response_model=List[FileTaskResponse])
+@router.get("/file-tasks", response_model=FileTaskListResponse)
 async def get_file_tasks(
-    limit: int = 50,
-    offset: int = 0,
+    page: int = 1,
+    page_size: int = 20,
     status: Optional[str] = None,
     batch_id: Optional[str] = None,
     db: Session = Depends(get_db)
@@ -683,8 +753,8 @@ async def get_file_tasks(
     """
     获取文件任务列表
     
-    - **limit**: 返回数量限制
-    - **offset**: 偏移量
+    - **page**: 页码
+    - **page_size**: 每页数量
     - **status**: 状态筛选
     - **batch_id**: 批次ID筛选
     """
@@ -695,7 +765,13 @@ async def get_file_tasks(
     if batch_id:
         query = query.filter(FileTask.batch_id == batch_id)
     
-    tasks = query.order_by(FileTask.created_at.desc()).offset(offset).limit(limit).all()
+    # 获取总数
+    total = query.count()
+
+    # 计算偏移量
+    offset = (page - 1) * page_size
+
+    tasks = query.order_by(FileTask.created_at.desc()).offset(offset).limit(page_size).all()
     
     result = []
     for task in tasks:
@@ -739,7 +815,12 @@ async def get_file_tasks(
             updated_at=task.updated_at.isoformat() if task.updated_at else ""
         ))
     
-    return result
+    return FileTaskListResponse(
+        total=total,
+        page=page,
+        page_size=page_size,
+        items=result
+    )
 
 
 @router.get("/file-tasks/{task_id}", response_model=ScanResultDetailResponse)

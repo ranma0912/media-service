@@ -2,6 +2,53 @@
 
 ## 2026-03-14（更新）
 
+### 跨页全选功能实现 🔧
+- ✅ 后端API修改
+  - ✅ 添加FileTaskListResponse模型
+    - ✅ 包含total（总数）、page（页码）、page_size（每页数量）、items（任务列表）字段
+  - ✅ 修改get_file_tasks API
+    - ✅ 将参数从limit/offset改为page/page_size
+    - ✅ 默认每页显示20行
+    - ✅ 添加总数计算逻辑
+    - ✅ 返回FileTaskListResponse对象
+    - ✅ 修复返回语句，确保返回正确的响应格式
+- ✅ 前端功能实现
+  - ✅ 添加状态管理变量
+    - ✅ selectAllAcrossPages：跨页全选状态
+    - ✅ allSelectedTaskIds：使用Set存储所有选中的任务ID
+    - ✅ pagination：分页信息（page、size、total）
+  - ✅ 实现选择逻辑
+    - ✅ handleFileTaskSelectionChange：更新所有选中的任务ID集合
+    - ✅ handleSelectAllAcrossPages：处理跨页全选
+      - ✅ 移除弹框提示，直接执行跨页全选
+      - ✅ 使用较大的页面大小（100）减少请求次数
+      - ✅ 遍历所有页面获取所有任务ID
+    - ✅ updateCurrentPageSelection：更新当前页的选中状态
+  - ✅ 修改批量操作函数
+    - ✅ handleBatchRescanFiles：使用allSelectedTaskIds获取选中的任务
+    - ✅ handleBatchStopFileScans：使用allSelectedTaskIds获取选中的任务
+    - ✅ handleBatchDeleteFileScanResults：使用allSelectedTaskIds获取选中的任务
+    - ✅ 所有批量操作完成后清空选中状态
+  - ✅ UI改进
+    - ✅ 在表格上方添加"跨页全选"复选框
+    - ✅ 显示已选中的任务数量（已选中 X / 总数 个文件）
+    - ✅ 在已选中数量后面添加红字警告："（跨页全选可能会占用较多系统资源，建议分批操作）"
+    - ✅ 警告文字只在跨页全选状态下显示
+    - ✅ 在表格下方添加分页组件，支持20、50、100行每页
+  - ✅ 样式优化
+    - ✅ 为selection-actions区域添加背景色和内边距
+    - ✅ 警告文字使用红色（#f56c6c），字体稍小（13px）
+    - ✅ 整体布局更加美观和清晰
+- ✅ 数据加载优化
+  - ✅ loadFileTasks函数在加载数据后自动更新当前页的选中状态
+  - ✅ 切换页面时保持选中状态
+  - ✅ 使用pagination.page和pagination.size作为参数
+  - ✅ 从响应中获取items和total
+- 🔧 已知问题
+  - 🔧 跨页全选后的批量操作还存在一些问题，需要进一步调试
+
+## 2026-03-14（更新）
+
 ### 批量操作接口路由冲突修复 🔧
 - ✅ 问题定位
   - ✅ 批量重新扫描失败,错误状态码422 (Unprocessable Content)
@@ -113,35 +160,27 @@
   - ✅ 支持detail数组的错误信息显示
   - ✅ 改进批量操作的错误提示
 
-### 批量操作接口类型转换问题 🔧
-- ✅ 尝试方案1：使用Pydantic v2的field_validator
-  - ✅ 创建 BatchFileOperationRequest 模型
-  - ✅ 添加 @field_validator 装饰器
-  - ✅ 实现类型转换逻辑
-  - ❌ 结果：仍然返回422错误
-- ✅ 尝试方案2：使用BeforeValidator和Annotated
-  - ✅ 创建 to_int_list 验证函数
-  - ✅ 定义 IntList = Annotated[List[int], BeforeValidator(to_int_list)]
-  - ✅ 使用 IntList 作为字段类型
-  - ❌ 结果：仍然返回422错误
-- ✅ 尝试方案3：使用Union[int, str] + 手动转换方法
-  - ✅ 使用 List[Union[int, str]] 作为字段类型
-  - ✅ 创建 get_int_ids() 方法进行手动转换
-  - ✅ 修改所有批量操作接口使用 get_int_ids()
-  - ✅ 添加 ConfigDict(str_strip_whitespace=True) 配置
-  - ❌ 结果：仍然返回422错误"Input should be a valid integer, unable to parse string as an integer"
-- 🔧 待解决问题
-  - 🔧 批量操作接口仍然返回类型转换错误
-  - 🔧 需要深入排查参数从前端到后端的传递过程
-  - 🔧 可能的原因：
-    - Pydantic验证器在不同版本或环境下的行为差异
-    - FastAPI的请求解析逻辑问题
-    - 前端发送的数据格式问题
-  - 🔧 下一步行动：
-    - 检查前端实际发送的请求体格式
-    - 检查请求头信息
-    - 尝试使用不同的验证器方式
-    - 考虑使用FastAPI的Body参数类型转换
+### 批量操作接口路由冲突修复 ✅
+- ✅ 问题定位
+  - ✅ 批量重新扫描失败，错误状态码422 (Unprocessable Content)
+  - ✅ 错误信息: "Input should be a valid integer, unable to parse string as an integer"
+  - ✅ 错误位置: loc: ["path", "media_file_id"]
+  - ✅ 根本原因: FastAPI路由匹配冲突
+    - `/files/{media_file_id}`路由先匹配到`batch`
+    - 导致`batch`被当作`media_file_id`路径参数处理
+- ✅ 修复方案
+  - ✅ 修改后端批量操作路由路径
+    - 批量重新扫描: `/files/batch/rescan` → `/batch/files/rescan`
+    - 批量停止扫描: `/files/batch/stop` → `/batch/files/stop`
+    - 批量删除: `/files/batch` → `/batch/files`
+  - ✅ 修改前端批量操作API调用
+    - 批量重新扫描: `/scan/files/batch/rescan` → `/scan/batch/files/rescan`
+    - 批量停止扫描: `/scan/files/batch/stop` → `/scan/batch/files/stop`
+    - 批量删除: `/scan/files/batch` → `/scan/batch/files`
+- ✅ 测试验证
+  - ✅ 批量重新扫描功能正常
+  - ✅ 批量停止扫描功能正常
+  - ✅ 批量删除功能正常
 
 ### 扫描功能测试与修复 ✅
 - ✅ 数据库初始化
