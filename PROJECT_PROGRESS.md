@@ -51,6 +51,18 @@
   - ✅ 当任务没有扫描到文件时，重新执行完整扫描
   - ✅ 修复 RescanOptions.skip_mode 属性错误
   - ✅ 根据 skip_keywords 和 skip_scanned 正确设置跳过模式
+- ✅ 批量操作接口路由冲突修复
+  - ✅ 修复批量重新扫描失败问题
+  - ✅ 修复批量停止扫描失败问题
+  - ✅ 修复批量删除失败问题
+  - ✅ 修改后端批量操作路由路径
+    - 批量重新扫描: `/files/batch/rescan` → `/batch/files/rescan`
+    - 批量停止扫描: `/files/batch/stop` → `/batch/files/stop`
+    - 批量删除: `/files/batch` → `/batch/files`
+  - ✅ 修改前端批量操作API调用
+    - 批量重新扫描: `/scan/files/batch/rescan` → `/scan/batch/files/rescan`
+    - 批量停止扫描: `/scan/files/batch/stop` → `/scan/batch/files/stop`
+    - 批量删除: `/scan/files/batch` → `/scan/batch/files`
 - ⏳ 待解决问题
   - ⏳ 扫描完成后点击重新扫描仍有异常
   - ⏳ 需要进一步调试重新扫描功能

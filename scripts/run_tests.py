@@ -27,18 +27,6 @@ def print_result(test_name, success, message=""):
 
 def test_project_structure():
     """测试项目结构"""
-
-
-def print_result(test_name, success, message=""):
-    """打印测试结果"""
-    status = "✅ PASS" if success else "❌ FAIL"
-    print(f"{status} {test_name}")
-    if message:
-        print(f"    {message}")
-
-
-def test_project_structure():
-    """测试项目结构"""
     print_section("1. 项目结构测试")
 
     project_root = Path(__file__).parent.parent

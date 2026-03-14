@@ -2,6 +2,28 @@
 
 ## 2026-03-14（更新）
 
+### 批量操作接口路由冲突修复 🔧
+- ✅ 问题定位
+  - ✅ 批量重新扫描失败,错误状态码422 (Unprocessable Content)
+  - ✅ 错误信息: "Input should be a valid integer, unable to parse string as an integer"
+  - ✅ 错误位置: loc: ["path", "media_file_id"]
+  - ✅ 根本原因: FastAPI路由匹配冲突
+    - `/files/{media_file_id}`路由先匹配到`batch`
+    - 导致`batch`被当作`media_file_id`路径参数处理
+- ✅ 修复方案
+  - ✅ 修改后端批量操作路由路径
+    - 批量重新扫描: `/files/batch/rescan` → `/batch/files/rescan`
+    - 批量停止扫描: `/files/batch/stop` → `/batch/files/stop`
+    - 批量删除: `/files/batch` → `/batch/files`
+  - ✅ 修改前端批量操作API调用
+    - 批量重新扫描: `/scan/files/batch/rescan` → `/scan/batch/files/rescan`
+    - 批量停止扫描: `/scan/files/batch/stop` → `/scan/batch/files/stop`
+    - 批量删除: `/scan/files/batch` → `/scan/batch/files`
+- ✅ 测试验证
+  - ✅ 批量重新扫描功能正常
+  - ✅ 批量停止扫描功能正常
+  - ✅ 批量删除功能正常
+
 ### 文件扫描模块需求重构 🔧
 - ✅ 需求文档编写
   - ✅ 创建 docs/文件扫描模块需求文档_v3.0.md

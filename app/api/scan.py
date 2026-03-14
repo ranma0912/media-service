@@ -3,7 +3,7 @@
 扫描相关API接口 - v3重构版本
 """
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator, BeforeValidator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator, BeforeValidator, Field
 from typing import Optional, List, Dict, Any, Union, Annotated
 from datetime import datetime
 from loguru import logger
@@ -29,6 +29,10 @@ def to_int_list(value: Any) -> List[int]:
             if isinstance(item, int):
                 result.append(item)
             elif isinstance(item, str):
+                # 去除前后空格后再转换
+                item = item.strip()
+                if not item:
+                    continue  # 跳过空字符串
                 try:
                     result.append(int(item))
                 except (ValueError, TypeError):
@@ -917,22 +921,13 @@ async def delete_file_scan_result(
 class BatchFileOperationRequest(BaseModel):
     """批量文件操作请求 - 基于媒体文件ID"""
     model_config = ConfigDict(str_strip_whitespace=True)
-    media_file_ids: List[Union[int, str]]
+    media_file_ids: IntList = Field(default_factory=list, description="媒体文件ID列表")
+
     
     def get_int_ids(self) -> List[int]:
-        """获取转换后的整数ID列表"""
-        result = []
-        for item in self.media_file_ids:
-            try:
-                if isinstance(item, str):
-                    result.append(int(item))
-                elif isinstance(item, (int, float)):
-                    result.append(int(item))
-                else:
-                    raise ValueError(f"无效的ID类型: {type(item)}")
-            except (ValueError, TypeError) as e:
-                raise ValueError(f"无法将 '{item}' 转换为整数: {e}")
-        return result
+        """获取转换后的整数ID列表（兼容旧代码）"""
+        # media_file_ids已经通过BeforeValidator转换为整数列表
+        return self.media_file_ids
 
 
 # ========== 媒体文件操作（基于media_file_id）==========
@@ -1080,7 +1075,7 @@ async def delete_media_file_scan_result(
 # ========== 批量文件操作 ==========
 
 
-@router.post("/files/batch/rescan")
+@router.post("/batch/files/rescan")
 async def batch_rescan_media_files(
     request: BatchFileOperationRequest,
     db: Session = Depends(get_db)
@@ -1178,7 +1173,7 @@ async def batch_rescan_media_files(
     }
     
 
-@router.post("/files/batch/stop")
+@router.post("/batch/files/stop")
 async def batch_stop_media_file_scans(
     request: BatchFileOperationRequest,
     db: Session = Depends(get_db)
@@ -1257,7 +1252,7 @@ async def batch_stop_media_file_scans(
     }
 
 
-@router.delete("/files/batch")
+@router.delete("/batch/files")
 async def batch_delete_media_file_scan_results(
     request: BatchFileOperationRequest,
     db: Session = Depends(get_db)

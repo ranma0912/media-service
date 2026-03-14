@@ -218,7 +218,7 @@ export function deleteMediaFileScanResult(mediaFileId) {
  * @returns {Promise}
  */
 export function batchRescanMediaFiles(mediaFileIds) {
-  return request.post('/scan/files/batch/rescan', { media_file_ids: mediaFileIds })
+  return request.post('/scan/batch/files/rescan', { media_file_ids: mediaFileIds })
 }
 
 /**
@@ -227,7 +227,7 @@ export function batchRescanMediaFiles(mediaFileIds) {
  * @returns {Promise}
  */
 export function batchStopMediaFileScans(mediaFileIds) {
-  return request.post('/scan/files/batch/stop', { media_file_ids: mediaFileIds })
+  return request.post('/scan/batch/files/stop', { media_file_ids: mediaFileIds })
 }
 
 /**
@@ -236,7 +236,7 @@ export function batchStopMediaFileScans(mediaFileIds) {
  * @returns {Promise}
  */
 export function batchDeleteMediaFileScanResults(mediaFileIds) {
-  return request.delete('/scan/files/batch', { data: { media_file_ids: mediaFileIds } })
+  return request.delete('/scan/batch/files', { data: { media_file_ids: mediaFileIds } })
 }
 
 // ========== 文件系统监控 ==========

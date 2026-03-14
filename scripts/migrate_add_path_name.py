@@ -33,7 +33,7 @@ def migrate():
             UPDATE scan_paths 
             SET path_name = (
                 CASE 
-                    WHEN path LIKE '%\%' THEN substr(path, instr(path, '\', -1) + 1)
+                    WHEN path LIKE '%\%' THEN substr(path, instr(path, '\\', -1) + 1)
                     WHEN path LIKE '%/%' THEN substr(path, instr(path, '/', -1) + 1)
                     ELSE path
                 END
