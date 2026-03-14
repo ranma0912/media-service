@@ -1,17 +1,17 @@
-
+# -*- coding: utf-8 -*-
 """
-扫描相关API接口
+扫描相关API接口 - v3重构版本
 """
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
-from pydantic import BaseModel
-from typing import Optional, List
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator, BeforeValidator
+from typing import Optional, List, Dict, Any, Union, Annotated
 from datetime import datetime
 from loguru import logger
 from sqlalchemy.orm import Session
+from pathlib import Path
 
-from app.modules.scanner import FileScanner
-from app.modules.recognizer import MediaRecognizer
-from app.db.models import ScanHistory, MediaFile, ScanPath, ScanProgress
+from app.modules.scanner.scan_manager import get_scan_manager
+from app.db.models import ScanHistory, MediaFile, ScanPath, ScanProgress, FileTask, SubtitleFile
 from app.db import get_db, get_db_context
 from app.core.websocket import manager
 
@@ -19,462 +19,245 @@ from app.core.websocket import manager
 router = APIRouter(tags=["扫描管理"])
 
 
-class ScanRequest(BaseModel):
-    """扫描请求"""
-    path: str
-    recursive: bool = True
-    scan_type: str = "incremental"  # full / incremental
+def to_int_list(value: Any) -> List[int]:
+    """将值转换为整数列表的验证函数"""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        result = []
+        for item in value:
+            if isinstance(item, int):
+                result.append(item)
+            elif isinstance(item, str):
+                try:
+                    result.append(int(item))
+                except (ValueError, TypeError):
+                    raise ValueError(f"无法将字符串 '{item}' 转换为整数")
+            elif isinstance(item, float):
+                result.append(int(item))
+            else:
+                raise ValueError(f"不支持的数据类型: {type(item)}")
+        return result
+    raise ValueError(f"预期的列表类型，得到: {type(value)}")
 
 
-class ScanResponse(BaseModel):
-    """扫描响应"""
-    task_id: str
+# 定义可接受int或str的列表类型
+IntList = Annotated[List[int], BeforeValidator(to_int_list)]
+
+
+# ========== 扫描请求/响应模型 ==========
+
+
+class ManualScanRequest(BaseModel):
+    """手动扫描请求"""
+    path: str  # 扫描路径（使用路径ID或直接路径）
+    use_default_strategy: bool = True  # 是否使用默认扫描策略
+    scan_type: Optional[str] = None  # 扫描类型（use_default_strategy=False时必填）
+    recursive: Optional[bool] = None  # 是否递归（use_default_strategy=False时必填）
+    skip_strategy: Optional[str] = None  # 跳过策略（use_default_strategy=False时必填）
+
+
+class ManualScanResponse(BaseModel):
+    """手动扫描响应"""
+    task_id: int
+    batch_id: str
     status: str
     message: str
 
 
-@router.post("/trigger", response_model=ScanResponse)
-async def trigger_scan(
-    request: ScanRequest,
+class DefaultScanConfigResponse(BaseModel):
+    """默认扫描配置响应"""
+    scan_type: str
+    recursive: bool
+    skip_strategy: str
+    scan_subdirectories: bool
+    scan_debounce_time: int
+    monitoring_enabled: bool
+    monitoring_mode: str
+    monitoring_debounce: int
+    auto_recognize: bool
+    auto_organize: bool
+
+
+class ScanPathConfigResponse(BaseModel):
+    """扫描路径配置响应"""
+    id: int
+    path: str
+    path_name: Optional[str]
+    enabled: bool
+    scan_type: str
+    recursive: bool
+    skip_strategy: str
+    scan_subdirectories: bool
+    scan_debounce_time: int
+    monitoring_enabled: bool
+    monitoring_mode: Optional[str]
+    monitoring_debounce: int
+    auto_recognize: bool
+    auto_organize: bool
+    ignore_patterns: Optional[List[str]]
+    last_scan_at: Optional[str]
+    last_scan_batch_id: Optional[str]
+    total_scans: int
+    total_files_found: int
+    created_at: str
+    updated_at: str
+
+
+class FileTaskResponse(BaseModel):
+    """文件任务响应"""
+    id: int
+    batch_id: Optional[str]
+    media_file_id: int
+    target_path: str
+    file_name: str
+    scan_type: Optional[str]
+    recursive: Optional[bool]
+    skip_strategy: Optional[str]
+    status: str
+    scan_progress: float
+    scan_started_at: Optional[str]
+    scan_completed_at: Optional[str]
+    scan_error: Optional[str]
+    video_tracks: int
+    audio_tracks: int
+    subtitle_tracks: int
+    video_codec: Optional[str]
+    audio_codec: Optional[str]
+    has_external_subtitle: bool
+    external_subtitle_name: Optional[str]
+    scan_result: Optional[str]
+    created_at: str
+    updated_at: str
+
+
+class ScanResultDetailResponse(BaseModel):
+    """扫描结果详情响应"""
+    file_name: str
+    file_size: int
+    file_type: str
+    file_path: str
+    scan_started_at: Optional[str]
+    scan_completed_at: Optional[str]
+    file_encoding_format: Optional[str]
+    video_tracks: int
+    audio_tracks: int
+    subtitle_tracks: int
+    has_external_subtitle: bool
+    external_subtitle_name: Optional[str]
+    scan_result: Optional[str]
+    file_hash: Optional[str]
+    scan_task_id: int
+    video_codec: Optional[str]
+    audio_codec: Optional[str]
+
+
+# ========== 扫描触发 ==========
+
+
+@router.post("/trigger", response_model=ManualScanResponse)
+async def trigger_manual_scan(
+    request: ManualScanRequest,
     background_tasks: BackgroundTasks
 ):
     """
     手动触发扫描
-
-    - **path**: 扫描目录路径
-    - **recursive**: 是否递归扫描
-    - **scan_type**: 扫描类型 (incremental/full)
+    
+    - **path**: 扫描路径（可以是路径ID或直接路径）
+    - **use_default_strategy**: 是否使用默认扫描策略
+    - **scan_type**: 扫描类型（use_default_strategy=False时必填）
+    - **recursive**: 是否递归（use_default_strategy=False时必填）
+    - **skip_strategy**: 跳过策略（use_default_strategy=False时必填）
     """
     try:
-        # 创建扫描器实例
-        scanner = FileScanner()
-
-        # 在后台任务中执行扫描
-        def scan_task():
-            try:
-                scan_history = scanner.scan_directory(
-                    path=request.path,
-                    recursive=request.recursive,
-                    scan_type=request.scan_type
+        scan_manager = get_scan_manager()
+        
+        # 检查路径是否存在
+        scan_path_obj = Path(request.path)
+        if not scan_path_obj.exists():
+            raise HTTPException(status_code=404, detail="扫描路径不存在")
+        if not scan_path_obj.is_dir():
+            raise HTTPException(status_code=400, detail="扫描路径不是目录")
+        
+        # 获取扫描策略
+        if request.use_default_strategy:
+            # 使用默认扫描策略
+            from app.core.config import config_manager
+            scanner_config = config_manager.get("scanner", {})
+            
+            scan_type = scanner_config.get("default_scan_type", "incremental")
+            recursive = scanner_config.get("default_recursive", True)
+            skip_strategy = scanner_config.get("default_skip_strategy", "keyword")
+            scan_subdirectories = scanner_config.get("scan_subdirectories", True)
+            scan_debounce_time = scanner_config.get("scan_debounce_time", 30)
+        else:
+            # 使用请求参数
+            if not request.scan_type or not request.recursive or not request.skip_strategy:
+                raise HTTPException(
+                    status_code=400,
+                    detail="use_default_strategy=False时，必须提供scan_type、recursive和skip_strategy参数"
                 )
-                logger.info(f"扫描任务完成: {scan_history.batch_id}")
-            except Exception as e:
-                logger.error(f"扫描任务失败: {e}")
-
-        # 添加后台任务
-        background_tasks.add_task(scan_task)
-
-        return ScanResponse(
-            task_id=datetime.now().strftime("%Y%m%d%H%M%S"),
-            status="accepted",
-            message="扫描任务已接受，正在后台执行"
+            
+            scan_type = request.scan_type
+            recursive = request.recursive
+            skip_strategy = request.skip_strategy
+            scan_subdirectories = True  # 默认值
+            scan_debounce_time = 30  # 默认值
+        
+        # 启动扫描任务
+        task_id = scan_manager.start_scan(
+            target_path=request.path,
+            scan_type=scan_type,
+            recursive=recursive,
+            skip_strategy=skip_strategy,
+            scan_subdirectories=scan_subdirectories,
+            scan_debounce_time=scan_debounce_time
         )
-
-    except FileNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except NotADirectoryError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        
+        # 获取批次ID
+        with get_db_context() as db:
+            task = db.query(ScanHistory).filter_by(id=task_id).first()
+            batch_id = task.batch_id if task else ""
+        
+        return ManualScanResponse(
+            task_id=task_id,
+            batch_id=batch_id,
+            status="accepted",
+            message="扫描任务已启动"
+        )
+        
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"触发扫描失败: {e}")
         raise HTTPException(status_code=500, detail=f"扫描触发失败: {str(e)}")
 
 
-@router.get("/tasks")
-async def get_scan_tasks(
-    limit: int = 20,
-    offset: int = 0,
-    db: Session = Depends(get_db)
-):
-    """
-    获取扫描任务列表
-
-    - **limit**: 返回数量限制
-    - **offset**: 偏移量
-    """
-    tasks = db.query(ScanHistory).order_by(
-        ScanHistory.started_at.desc()
-    ).offset(offset).limit(limit).all()
-
-    return {
-        "items": [
-            {
-                "id": task.id,
-                "batch_id": task.batch_id,
-                "target_path": task.target_path,
-                "scan_type": task.scan_type,
-                "recursive": task.recursive,
-                "total_files": task.total_files,
-                "new_files": task.new_files,
-                "updated_files": task.updated_files,
-                "skipped_files": task.skipped_files,
-                "failed_files": task.failed_files,
-                "duration_seconds": task.duration_seconds,
-                "started_at": task.started_at.isoformat() if task.started_at else None,
-                "completed_at": task.completed_at.isoformat() if task.completed_at else None,
-                "status": "completed" if task.completed_at else "running"
-            }
-            for task in tasks
-        ],
-        "total": len(tasks)
-    }
-
-
-@router.get("/tasks/{task_id}")
-async def get_scan_task_detail(
-    task_id: int,
-    db: Session = Depends(get_db)
-):
-    """
-    获取扫描任务详情
-
-    - **task_id**: 任务ID
-    """
-    task = db.query(ScanHistory).filter_by(id=task_id).first()
-
-    if not task:
-        raise HTTPException(status_code=404, detail="扫描任务不存在")
-
-    return {
-        "id": task.id,
-        "batch_id": task.batch_id,
-        "target_path": task.target_path,
-        "scan_type": task.scan_type,
-        "recursive": task.recursive,
-        "total_files": task.total_files,
-        "new_files": task.new_files,
-        "updated_files": task.updated_files,
-        "skipped_files": task.skipped_files,
-        "failed_files": task.failed_files,
-        "duration_seconds": task.duration_seconds,
-        "started_at": task.started_at.isoformat() if task.started_at else None,
-        "completed_at": task.completed_at.isoformat() if task.completed_at else None,
-        "error_message": task.error_message
-    }
-
-
-@router.post("/recognize")
-async def recognize_files(
-    file_ids: List[int],
-    background_tasks: BackgroundTasks
-):
-    """
-    批量识别文件
-
-    - **file_ids**: 媒体文件ID列表
-    """
-    async def recognize_task():
-        try:
-            async with MediaRecognizer() as recognizer:
-                for file_id in file_ids:
-                    try:
-                        await recognizer.recognize_media_file(file_id)
-                        logger.info(f"识别完成: {file_id}")
-                    except Exception as e:
-                        logger.error(f"识别失败: {file_id}, 错误: {e}")
-        except Exception as e:
-            logger.error(f"批量识别任务失败: {e}")
-
-    background_tasks.add_task(recognize_task)
-
-    return {
-        "status": "accepted",
-        "message": f"已提交 {len(file_ids)} 个文件的识别任务",
-        "file_count": len(file_ids)
-    }
-
-
-@router.get("/pending")
-async def get_pending_files(
-    limit: int = 50,
-    offset: int = 0,
-    db: Session = Depends(get_db)
-):
-    """
-    获取待识别文件列表
-
-    - **limit**: 返回数量限制
-    - **offset**: 偏移量
-    """
-    # 查询没有识别结果的文件
-    files = db.query(MediaFile).filter(
-        ~MediaFile.id.in_(
-            db.query(MediaFile.id).join(
-                "recognition_results"
-            ).distinct()
-        )
-    ).order_by(
-        MediaFile.scanned_at.desc()
-    ).offset(offset).limit(limit).all()
-
-    return [
-        {
-            "id": f.id,
-            "file_name": f.file_name,
-            "file_path": f.file_path,
-            "file_size": f.file_size,
-            "media_type": f.media_type,
-            "scanned_at": f.scanned_at.isoformat() if f.scanned_at else None
-        }
-        for f in files
-    ]
-
-
-# ========== 扫描路径管理 ==========
-
-
-class ScanPathCreate(BaseModel):
-    """创建扫描路径请求"""
-    path: str
-    path_name: Optional[str] = None  # 路径名称
-    scan_type: str = "incremental"  # full/incremental
-    recursive: bool = True
-    scan_interval: int = 300  # 扫描间隔（秒）
-    monitoring_enabled: bool = True  # 是否启用监控
-    monitoring_debounce: int = 5  # 监控防抖延迟（秒）
-    ignore_patterns: Optional[List[str]] = None  # 忽略文件模式列表
-    enabled: bool = True
-
-
-class ScanPathUpdate(BaseModel):
-    """更新扫描路径请求"""
-    path: Optional[str] = None
-    path_name: Optional[str] = None  # 路径名称
-    scan_type: Optional[str] = None  # full/incremental
-    recursive: Optional[bool] = None
-    scan_interval: Optional[int] = None  # 扫描间隔（秒）
-    monitoring_enabled: Optional[bool] = None  # 是否启用监控
-    monitoring_debounce: Optional[int] = None  # 监控防抖延迟（秒）
-    ignore_patterns: Optional[List[str]] = None  # 忽略文件模式列表
-    enabled: Optional[bool] = None
-
-
-@router.get("/paths")
-async def get_scan_paths(
-    enabled_only: bool = False,
-    db: Session = Depends(get_db)
-):
-    """
-    获取扫描路径列表
-
-    - **enabled_only**: 是否只返回启用的路径
-    """
-    query = db.query(ScanPath)
-    if enabled_only:
-        query = query.filter(ScanPath.enabled == True)
-
-    paths = query.order_by(ScanPath.id).all()
-
-    return [
-        {
-            "id": path.id,
-            "path": path.path,
-            "path_name": path.path_name,
-            "scan_type": path.scan_type,
-            "recursive": path.recursive,
-            "scan_interval": path.scan_interval,
-            "monitoring_enabled": path.monitoring_enabled,
-            "monitoring_debounce": path.monitoring_debounce,
-            "ignore_patterns": path.ignore_patterns,
-            "enabled": path.enabled,
-            "last_scan_at": path.last_scan_at.isoformat() if path.last_scan_at else None,
-            "last_scan_batch_id": path.last_scan_batch_id,
-            "total_scans": path.total_scans,
-            "total_files_found": path.total_files_found,
-            "created_at": path.created_at.isoformat() if path.created_at else None,
-            "updated_at": path.updated_at.isoformat() if path.updated_at else None
-        }
-        for path in paths
-    ]
-
-
-@router.post("/paths")
-async def create_scan_path(
-    path_data: ScanPathCreate,
-    db: Session = Depends(get_db)
-):
-    """
-    添加扫描路径
-
-    - **path**: 扫描路径
-    - **recursive**: 是否递归扫描
-    - **enabled**: 是否启用
-    """
-    # 检查路径是否已存在
-    existing = db.query(ScanPath).filter(ScanPath.path == path_data.path).first()
-    if existing:
-        raise HTTPException(status_code=400, detail="扫描路径已存在")
-
-    # 验证路径是否存在
-    from pathlib import Path
-    scan_path = Path(path_data.path)
-    if not scan_path.exists():
-        raise HTTPException(status_code=404, detail="路径不存在")
-    if not scan_path.is_dir():
-        raise HTTPException(status_code=400, detail="路径不是目录")
-
-    # 创建扫描路径
-    scan_path = ScanPath(
-        path=path_data.path,
-        path_name=path_data.path_name,
-        scan_type=path_data.scan_type,
-        recursive=path_data.recursive,
-        scan_interval=path_data.scan_interval,
-        monitoring_enabled=path_data.monitoring_enabled,
-        monitoring_debounce=path_data.monitoring_debounce,
-        ignore_patterns=path_data.ignore_patterns,
-        enabled=path_data.enabled
-    )
-    db.add(scan_path)
-    db.commit()
-    db.refresh(scan_path)
-
-    logger.info(f"添加扫描路径: {path_data.path}")
-
-    return {
-        "id": scan_path.id,
-        "path": scan_path.path,
-        "path_name": scan_path.path_name,
-        "scan_type": scan_path.scan_type,
-        "recursive": scan_path.recursive,
-        "scan_interval": scan_path.scan_interval,
-        "monitoring_enabled": scan_path.monitoring_enabled,
-        "monitoring_debounce": scan_path.monitoring_debounce,
-        "ignore_patterns": scan_path.ignore_patterns,
-        "enabled": scan_path.enabled,
-        "last_scan_at": scan_path.last_scan_at.isoformat() if scan_path.last_scan_at else None,
-        "last_scan_batch_id": scan_path.last_scan_batch_id,
-        "total_scans": scan_path.total_scans,
-        "total_files_found": scan_path.total_files_found,
-        "created_at": scan_path.created_at.isoformat() if scan_path.created_at else None,
-        "updated_at": scan_path.updated_at.isoformat() if scan_path.updated_at else None
-    }
-
-
-@router.put("/paths/{path_id}")
-async def update_scan_path(
-    path_id: int,
-    path_data: ScanPathUpdate,
-    db: Session = Depends(get_db)
-):
-    """
-    更新扫描路径
-
-    - **path_id**: 路径ID
-    - **path**: 扫描路径
-    - **recursive**: 是否递归扫描
-    - **enabled**: 是否启用
-    """
-    scan_path = db.query(ScanPath).filter(ScanPath.id == path_id).first()
-    if not scan_path:
-        raise HTTPException(status_code=404, detail="扫描路径不存在")
-
-    # 更新字段
-    if path_data.path is not None:
-        # 检查新路径是否已被其他路径使用
-        existing = db.query(ScanPath).filter(
-            ScanPath.path == path_data.path,
-            ScanPath.id != path_id
-        ).first()
-        if existing:
-            raise HTTPException(status_code=400, detail="路径已被其他扫描路径使用")
-
-        # 验证路径是否存在
-        from pathlib import Path
-        new_path = Path(path_data.path)
-        if not new_path.exists():
-            raise HTTPException(status_code=404, detail="路径不存在")
-        if not new_path.is_dir():
-            raise HTTPException(status_code=400, detail="路径不是目录")
-
-        scan_path.path = path_data.path
-
-    if path_data.path_name is not None:
-        scan_path.path_name = path_data.path_name
-    if path_data.scan_type is not None:
-        scan_path.scan_type = path_data.scan_type
-    if path_data.recursive is not None:
-        scan_path.recursive = path_data.recursive
-    if path_data.scan_interval is not None:
-        scan_path.scan_interval = path_data.scan_interval
-    if path_data.monitoring_enabled is not None:
-        scan_path.monitoring_enabled = path_data.monitoring_enabled
-    if path_data.monitoring_debounce is not None:
-        scan_path.monitoring_debounce = path_data.monitoring_debounce
-    if path_data.ignore_patterns is not None:
-        scan_path.ignore_patterns = path_data.ignore_patterns
-    if path_data.enabled is not None:
-        scan_path.enabled = path_data.enabled
-
-    scan_path.updated_at = datetime.now()
-    db.commit()
-    db.refresh(scan_path)
-
-    logger.info(f"更新扫描路径: {path_id}")
-
-    return {
-        "id": scan_path.id,
-        "path": scan_path.path,
-        "path_name": scan_path.path_name,
-        "scan_type": scan_path.scan_type,
-        "recursive": scan_path.recursive,
-        "scan_interval": scan_path.scan_interval,
-        "monitoring_enabled": scan_path.monitoring_enabled,
-        "monitoring_debounce": scan_path.monitoring_debounce,
-        "ignore_patterns": scan_path.ignore_patterns,
-        "enabled": scan_path.enabled,
-        "last_scan_at": scan_path.last_scan_at.isoformat() if scan_path.last_scan_at else None,
-        "last_scan_batch_id": scan_path.last_scan_batch_id,
-        "total_scans": scan_path.total_scans,
-        "total_files_found": scan_path.total_files_found,
-        "created_at": scan_path.created_at.isoformat() if scan_path.created_at else None,
-        "updated_at": scan_path.updated_at.isoformat() if scan_path.updated_at else None
-    }
-
-
-@router.delete("/paths/{path_id}")
-async def delete_scan_path(
-    path_id: int,
-    db: Session = Depends(get_db)
-):
-    """
-    删除扫描路径
-
-    - **path_id**: 路径ID
-    """
-    scan_path = db.query(ScanPath).filter(ScanPath.id == path_id).first()
-    if not scan_path:
-        raise HTTPException(status_code=404, detail="扫描路径不存在")
-
-    path_str = scan_path.path
-    db.delete(scan_path)
-    db.commit()
-
-    logger.info(f"删除扫描路径: {path_str}")
-
-    return {"message": "扫描路径已删除"}
-
 
 # ========== 默认扫描策略配置 ==========
 
-from app.core.config import config_manager
 
-
-@router.get("/config/default")
+@router.get("/config/default", response_model=DefaultScanConfigResponse)
 async def get_default_scan_config():
     """
     获取默认扫描策略配置
     """
     try:
-        config = config_manager.get("scanner", {})
+        from app.core.config import config_manager
+        scanner_config = config_manager.get("scanner", {})
         
-        default_config = {
-            "default_scan_type": config.get("default_scan_type", "full"),
-            "default_recursive": config.get("default_recursive", True),
-            "default_skip_mode": config.get("default_skip_mode", "keyword"),
-            "default_ignore_patterns": config.get("default_ignore_patterns", [])
-        }
-        
-        return default_config
+        return DefaultScanConfigResponse(
+            scan_type=scanner_config.get("default_scan_type", "incremental"),
+            recursive=scanner_config.get("default_recursive", True),
+            skip_strategy=scanner_config.get("default_skip_strategy", "keyword"),
+            scan_subdirectories=scanner_config.get("scan_subdirectories", True),
+            scan_debounce_time=scanner_config.get("scan_debounce_time", 30),
+            monitoring_enabled=scanner_config.get("monitoring_enabled", False),
+            monitoring_mode=scanner_config.get("monitoring_mode", "watchdog"),
+            monitoring_debounce=scanner_config.get("monitoring_debounce", 5),
+            auto_recognize=scanner_config.get("auto_recognize", False),
+            auto_organize=scanner_config.get("auto_organize", False)
+        )
     except Exception as e:
         logger.error(f"获取默认扫描策略失败: {e}")
         raise HTTPException(status_code=500, detail=f"获取配置失败: {str(e)}")
@@ -482,36 +265,55 @@ async def get_default_scan_config():
 
 @router.put("/config/default")
 async def update_default_scan_config(
-    default_scan_type: Optional[str] = None,
-    default_recursive: Optional[bool] = None,
-    default_skip_mode: Optional[str] = None,
-    default_ignore_patterns: Optional[List[str]] = None
+    scan_type: Optional[str] = None,
+    recursive: Optional[bool] = None,
+    skip_strategy: Optional[str] = None,
+    scan_subdirectories: Optional[bool] = None,
+    scan_debounce_time: Optional[int] = None,
+    monitoring_enabled: Optional[bool] = None,
+    monitoring_mode: Optional[str] = None,
+    monitoring_debounce: Optional[int] = None,
+    auto_recognize: Optional[bool] = None,
+    auto_organize: Optional[bool] = None
 ):
     """
     更新默认扫描策略配置
     """
     try:
-        # 获取当前scanner配置
-        config = config_manager.get("scanner", {})
+        from app.core.config import config_manager
+        scanner_config = config_manager.get("scanner", {})
         
         # 更新配置项
-        if default_scan_type is not None:
-            config["default_scan_type"] = default_scan_type
-        if default_recursive is not None:
-            config["default_recursive"] = default_recursive
-        if default_skip_mode is not None:
-            config["default_skip_mode"] = default_skip_mode
-        if default_ignore_patterns is not None:
-            config["default_ignore_patterns"] = default_ignore_patterns
+        if scan_type is not None:
+            scanner_config["default_scan_type"] = scan_type
+        if recursive is not None:
+            scanner_config["default_recursive"] = recursive
+        if skip_strategy is not None:
+            scanner_config["default_skip_strategy"] = skip_strategy
+        if scan_subdirectories is not None:
+            scanner_config["scan_subdirectories"] = scan_subdirectories
+        if scan_debounce_time is not None:
+            scanner_config["scan_debounce_time"] = scan_debounce_time
+        if monitoring_enabled is not None:
+            scanner_config["monitoring_enabled"] = monitoring_enabled
+        if monitoring_mode is not None:
+            scanner_config["monitoring_mode"] = monitoring_mode
+        if monitoring_debounce is not None:
+            scanner_config["monitoring_debounce"] = monitoring_debounce
+        if auto_recognize is not None:
+            scanner_config["auto_recognize"] = auto_recognize
+        if auto_organize is not None:
+            scanner_config["auto_organize"] = auto_organize
         
         # 保存配置
-        config_manager.set("scanner", config)
+        config_manager.set("scanner", scanner_config)
         
-        logger.info(f"更新默认扫描策略: {config}")
+        logger.info(f"更新默认扫描策略: {scanner_config}")
         return {"message": "配置已更新"}
     except Exception as e:
         logger.error(f"更新默认扫描策略失败: {e}")
         raise HTTPException(status_code=500, detail=f"更新配置失败: {str(e)}")
+
 
 @router.post("/config/default/reset")
 async def reset_default_scan_config():
@@ -519,15 +321,21 @@ async def reset_default_scan_config():
     重置默认扫描策略为系统默认值
     """
     try:
-        # 重置为系统默认值
+        from app.core.config import config_manager
+        
         default_config = {
-            "default_scan_type": "full",
+            "default_scan_type": "incremental",
             "default_recursive": True,
-            "default_skip_mode": "keyword",
-            "default_ignore_patterns": []
+            "default_skip_strategy": "keyword",
+            "scan_subdirectories": True,
+            "scan_debounce_time": 30,
+            "monitoring_enabled": False,
+            "monitoring_mode": "watchdog",
+            "monitoring_debounce": 5,
+            "auto_recognize": False,
+            "auto_organize": False
         }
         
-        # 保存配置
         config_manager.set("scanner", default_config)
         
         logger.info("重置默认扫描策略为系统默认值")
@@ -537,1182 +345,987 @@ async def reset_default_scan_config():
         raise HTTPException(status_code=500, detail=f"重置配置失败: {str(e)}")
 
 
-# ========== 扫描任务管理 ==========
+# ========== 扫描路径管理 ==========
 
 
-class TaskCreateRequest(BaseModel):
-    """创建扫描任务请求"""
-    path_id: Optional[int] = None
-    path: Optional[str] = None
+class ScanPathCreate(BaseModel):
+    """创建扫描路径请求"""
+    path: str
+    path_name: Optional[str] = None
+    enabled: bool = True
+    scan_type: str = "incremental"
     recursive: bool = True
-    scan_type: str = "incremental"  # full / incremental
-    skip_mode: str = "keyword"  # keyword/record/none
+    skip_strategy: str = "keyword"
+    scan_subdirectories: bool = True
+    scan_debounce_time: int = 30
+    monitoring_enabled: bool = False
+    monitoring_mode: str = "watchdog"
+    monitoring_debounce: int = 5
+    auto_recognize: bool = False
+    auto_organize: bool = False
+    ignore_patterns: Optional[List[str]] = None
 
 
-class RescanOptions(BaseModel):
-    """重新扫描选项"""
-    rescan_type: str = "all"  # all/failed/selected
-    file_list: List[str] = []  # 仅rescan_type=selected时使用
-    force_update: bool = True
-    skip_keywords: bool = True
-    skip_scanned: bool = False
-    use_ignore_patterns: bool = True
+class ScanPathUpdate(BaseModel):
+    """更新扫描路径请求"""
+    path: Optional[str] = None
+    path_name: Optional[str] = None
+    enabled: Optional[bool] = None
+    scan_type: Optional[str] = None
+    recursive: Optional[bool] = None
+    skip_strategy: Optional[str] = None
+    scan_subdirectories: Optional[bool] = None
+    scan_debounce_time: Optional[int] = None
+    monitoring_enabled: Optional[bool] = None
+    monitoring_mode: Optional[str] = None
+    monitoring_debounce: Optional[int] = None
+    auto_recognize: Optional[bool] = None
+    auto_organize: Optional[bool] = None
+    ignore_patterns: Optional[List[str]] = None
 
 
-@router.post("/tasks")
-async def create_scan_task(
-    request: TaskCreateRequest,
+@router.get("/paths", response_model=List[ScanPathConfigResponse])
+async def get_scan_paths(
+    enabled_only: bool = False,
+    db: Session = Depends(get_db)
+):
+    """
+    获取扫描路径列表
+    
+    - **enabled_only**: 是否只返回启用的路径
+    """
+    query = db.query(ScanPath)
+    if enabled_only:
+        query = query.filter(ScanPath.enabled == True)
+    
+    paths = query.order_by(ScanPath.id).all()
+    
+    return [
+        ScanPathConfigResponse(
+            id=path.id,
+            path=path.path,
+            path_name=path.path_name,
+            enabled=path.enabled,
+            scan_type=path.scan_type,
+            recursive=path.recursive,
+            skip_strategy=path.skip_strategy,
+            scan_subdirectories=path.scan_subdirectories,
+            scan_debounce_time=path.scan_debounce_time,
+            monitoring_enabled=path.monitoring_enabled,
+            monitoring_mode=path.monitoring_mode,
+            monitoring_debounce=path.monitoring_debounce,
+            auto_recognize=path.auto_recognize,
+            auto_organize=path.auto_organize,
+            ignore_patterns=path.ignore_patterns,
+            last_scan_at=path.last_scan_at.isoformat() if path.last_scan_at else None,
+            last_scan_batch_id=path.last_scan_batch_id,
+            total_scans=path.total_scans,
+            total_files_found=path.total_files_found,
+            created_at=path.created_at.isoformat() if path.created_at else "",
+            updated_at=path.updated_at.isoformat() if path.updated_at else ""
+        )
+        for path in paths
+    ]
+
+
+@router.get("/paths/{path_id}", response_model=ScanPathConfigResponse)
+async def get_scan_path(
+    path_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    获取单个扫描路径配置
+    
+    - **path_id**: 路径ID
+    """
+    scan_path = db.query(ScanPath).filter(ScanPath.id == path_id).first()
+    if not scan_path:
+        raise HTTPException(status_code=404, detail="扫描路径不存在")
+    
+    return ScanPathConfigResponse(
+        id=scan_path.id,
+        path=scan_path.path,
+        path_name=scan_path.path_name,
+        enabled=scan_path.enabled,
+        scan_type=scan_path.scan_type,
+        recursive=scan_path.recursive,
+        skip_strategy=scan_path.skip_strategy,
+        scan_subdirectories=scan_path.scan_subdirectories,
+        scan_debounce_time=scan_path.scan_debounce_time,
+        monitoring_enabled=scan_path.monitoring_enabled,
+        monitoring_mode=scan_path.monitoring_mode,
+        monitoring_debounce=scan_path.monitoring_debounce,
+        auto_recognize=scan_path.auto_recognize,
+        auto_organize=scan_path.auto_organize,
+        ignore_patterns=scan_path.ignore_patterns,
+        last_scan_at=scan_path.last_scan_at.isoformat() if scan_path.last_scan_at else None,
+        last_scan_batch_id=scan_path.last_scan_batch_id,
+        total_scans=scan_path.total_scans,
+        total_files_found=scan_path.total_files_found,
+        created_at=scan_path.created_at.isoformat() if scan_path.created_at else "",
+        updated_at=scan_path.updated_at.isoformat() if scan_path.updated_at else ""
+    )
+
+
+@router.post("/paths", response_model=ScanPathConfigResponse)
+async def create_scan_path(
+    path_data: ScanPathCreate,
+    db: Session = Depends(get_db)
+):
+    """
+    添加扫描路径
+    
+    - **path**: 扫描路径
+    - **path_name**: 路径名称（可选）
+    - **enabled**: 是否启用
+    - **scan_type**: 扫描类型
+    - **recursive**: 是否递归
+    - **skip_strategy**: 跳过策略
+    - **scan_subdirectories**: 是否扫描子目录
+    - **scan_debounce_time**: 扫描防抖时间
+    - **monitoring_enabled**: 是否启用监控
+    - **monitoring_mode**: 监控模式
+    - **monitoring_debounce**: 监控防抖时间
+    - **auto_recognize**: 扫描完成后是否自动识别
+    - **auto_organize**: 扫描完成后是否自动整理
+    - **ignore_patterns**: 忽略文件模式列表
+    """
+    # 检查路径是否已存在
+    existing = db.query(ScanPath).filter(ScanPath.path == path_data.path).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="扫描路径已存在")
+    
+    # 验证路径是否存在
+    scan_path_obj = Path(path_data.path)
+    if not scan_path_obj.exists():
+        raise HTTPException(status_code=404, detail="路径不存在")
+    if not scan_path_obj.is_dir():
+        raise HTTPException(status_code=400, detail="路径不是目录")
+    
+    # 创建扫描路径
+    scan_path = ScanPath(
+        path=path_data.path,
+        path_name=path_data.path_name,
+        enabled=path_data.enabled,
+        scan_type=path_data.scan_type,
+        recursive=path_data.recursive,
+        skip_strategy=path_data.skip_strategy,
+        scan_subdirectories=path_data.scan_subdirectories,
+        scan_debounce_time=path_data.scan_debounce_time,
+        monitoring_enabled=path_data.monitoring_enabled,
+        monitoring_mode=path_data.monitoring_mode,
+        monitoring_debounce=path_data.monitoring_debounce,
+        auto_recognize=path_data.auto_recognize,
+        auto_organize=path_data.auto_organize,
+        ignore_patterns=path_data.ignore_patterns
+    )
+    db.add(scan_path)
+    db.commit()
+    db.refresh(scan_path)
+    
+    logger.info(f"添加扫描路径: {path_data.path}")
+    
+    return ScanPathConfigResponse(
+        id=scan_path.id,
+        path=scan_path.path,
+        path_name=scan_path.path_name,
+        enabled=scan_path.enabled,
+        scan_type=scan_path.scan_type,
+        recursive=scan_path.recursive,
+        skip_strategy=scan_path.skip_strategy,
+        scan_subdirectories=scan_path.scan_subdirectories,
+        scan_debounce_time=scan_path.scan_debounce_time,
+        monitoring_enabled=scan_path.monitoring_enabled,
+        monitoring_mode=scan_path.monitoring_mode,
+        monitoring_debounce=scan_path.monitoring_debounce,
+        auto_recognize=scan_path.auto_recognize,
+        auto_organize=scan_path.auto_organize,
+        ignore_patterns=scan_path.ignore_patterns,
+        last_scan_at=scan_path.last_scan_at.isoformat() if scan_path.last_scan_at else None,
+        last_scan_batch_id=scan_path.last_scan_batch_id,
+        total_scans=scan_path.total_scans,
+        total_files_found=scan_path.total_files_found,
+        created_at=scan_path.created_at.isoformat() if scan_path.created_at else "",
+        updated_at=scan_path.updated_at.isoformat() if scan_path.updated_at else ""
+    )
+
+
+@router.put("/paths/{path_id}", response_model=ScanPathConfigResponse)
+async def update_scan_path(
+    path_id: int,
+    path_data: ScanPathUpdate,
+    db: Session = Depends(get_db)
+):
+    """
+    更新扫描路径
+    
+    - **path_id**: 路径ID
+    """
+    scan_path = db.query(ScanPath).filter(ScanPath.id == path_id).first()
+    if not scan_path:
+        raise HTTPException(status_code=404, detail="扫描路径不存在")
+    
+    # 更新字段
+    if path_data.path is not None:
+        # 检查新路径是否已被其他路径使用
+        existing = db.query(ScanPath).filter(
+            ScanPath.path == path_data.path,
+            ScanPath.id != path_id
+        ).first()
+        if existing:
+            raise HTTPException(status_code=400, detail="路径已被其他扫描路径使用")
+        
+        # 验证路径是否存在
+        scan_path_obj = Path(path_data.path)
+        if not scan_path_obj.exists():
+            raise HTTPException(status_code=404, detail="路径不存在")
+        if not scan_path_obj.is_dir():
+            raise HTTPException(status_code=400, detail="路径不是目录")
+        
+        scan_path.path = path_data.path
+    
+    if path_data.path_name is not None:
+        scan_path.path_name = path_data.path_name
+    if path_data.enabled is not None:
+        scan_path.enabled = path_data.enabled
+    if path_data.scan_type is not None:
+        scan_path.scan_type = path_data.scan_type
+    if path_data.recursive is not None:
+        scan_path.recursive = path_data.recursive
+    if path_data.skip_strategy is not None:
+        scan_path.skip_strategy = path_data.skip_strategy
+    if path_data.scan_subdirectories is not None:
+        scan_path.scan_subdirectories = path_data.scan_subdirectories
+    if path_data.scan_debounce_time is not None:
+        scan_path.scan_debounce_time = path_data.scan_debounce_time
+    if path_data.monitoring_enabled is not None:
+        scan_path.monitoring_enabled = path_data.monitoring_enabled
+    if path_data.monitoring_mode is not None:
+        scan_path.monitoring_mode = path_data.monitoring_mode
+    if path_data.monitoring_debounce is not None:
+        scan_path.monitoring_debounce = path_data.monitoring_debounce
+    if path_data.auto_recognize is not None:
+        scan_path.auto_recognize = path_data.auto_recognize
+    if path_data.auto_organize is not None:
+        scan_path.auto_organize = path_data.auto_organize
+    if path_data.ignore_patterns is not None:
+        scan_path.ignore_patterns = path_data.ignore_patterns
+    
+    scan_path.updated_at = datetime.now()
+    db.commit()
+    db.refresh(scan_path)
+    
+    logger.info(f"更新扫描路径: {path_id}")
+    
+    return ScanPathConfigResponse(
+        id=scan_path.id,
+        path=scan_path.path,
+        path_name=scan_path.path_name,
+        enabled=scan_path.enabled,
+        scan_type=scan_path.scan_type,
+        recursive=scan_path.recursive,
+        skip_strategy=scan_path.skip_strategy,
+        scan_subdirectories=scan_path.scan_subdirectories,
+        scan_debounce_time=scan_path.scan_debounce_time,
+        monitoring_enabled=scan_path.monitoring_enabled,
+        monitoring_mode=scan_path.monitoring_mode,
+        monitoring_debounce=scan_path.monitoring_debounce,
+        auto_recognize=scan_path.auto_recognize,
+        auto_organize=scan_path.auto_organize,
+        ignore_patterns=scan_path.ignore_patterns,
+        last_scan_at=scan_path.last_scan_at.isoformat() if scan_path.last_scan_at else None,
+        last_scan_batch_id=scan_path.last_scan_batch_id,
+        total_scans=scan_path.total_scans,
+        total_files_found=scan_path.total_files_found,
+        created_at=scan_path.created_at.isoformat() if scan_path.created_at else "",
+        updated_at=scan_path.updated_at.isoformat() if scan_path.updated_at else ""
+    )
+
+
+@router.delete("/paths/{path_id}")
+async def delete_scan_path(
+    path_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    删除扫描路径
+    
+    - **path_id**: 路径ID
+    """
+    scan_path = db.query(ScanPath).filter(ScanPath.id == path_id).first()
+    if not scan_path:
+        raise HTTPException(status_code=404, detail="扫描路径不存在")
+    
+    path_str = scan_path.path
+    db.delete(scan_path)
+    db.commit()
+    
+    logger.info(f"删除扫描路径: {path_str}")
+    
+    return {"message": "扫描路径已删除"}
+
+
+# ========== 文件任务管理 ==========
+
+
+@router.get("/file-tasks", response_model=List[FileTaskResponse])
+async def get_file_tasks(
+    limit: int = 50,
+    offset: int = 0,
+    status: Optional[str] = None,
+    batch_id: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    """
+    获取文件任务列表
+    
+    - **limit**: 返回数量限制
+    - **offset**: 偏移量
+    - **status**: 状态筛选
+    - **batch_id**: 批次ID筛选
+    """
+    query = db.query(FileTask)
+    
+    if status:
+        query = query.filter(FileTask.status == status)
+    if batch_id:
+        query = query.filter(FileTask.batch_id == batch_id)
+    
+    tasks = query.order_by(FileTask.created_at.desc()).offset(offset).limit(limit).all()
+    
+    result = []
+    for task in tasks:
+        # 查找文件所在路径的扫描策略
+        scan_path = db.query(ScanPath).filter(
+            ScanPath.path.like(f"{task.target_path}%")
+        ).first()
+        
+        scan_type = None
+        recursive = None
+        skip_strategy = None
+        
+        if scan_path:
+            scan_type = scan_path.scan_type
+            recursive = scan_path.recursive
+            skip_strategy = scan_path.skip_strategy
+        
+        result.append(FileTaskResponse(
+            id=task.id,
+            batch_id=task.batch_id,
+            media_file_id=task.media_file_id,
+            target_path=task.target_path,
+            file_name=task.file_name,
+            scan_type=scan_type,
+            recursive=recursive,
+            skip_strategy=skip_strategy,
+            status=task.status,
+            scan_progress=task.scan_progress or 0,
+            scan_started_at=task.scan_started_at.isoformat() if task.scan_started_at else None,
+            scan_completed_at=task.scan_completed_at.isoformat() if task.scan_completed_at else None,
+            scan_error=task.scan_error,
+            video_tracks=task.video_tracks or 0,
+            audio_tracks=task.audio_tracks or 0,
+            subtitle_tracks=task.subtitle_tracks or 0,
+            video_codec=task.video_codec,
+            audio_codec=task.audio_codec,
+            has_external_subtitle=task.has_external_subtitle or False,
+            external_subtitle_name=task.external_subtitle_name,
+            scan_result=task.scan_result,
+            created_at=task.created_at.isoformat() if task.created_at else "",
+            updated_at=task.updated_at.isoformat() if task.updated_at else ""
+        ))
+    
+    return result
+
+
+@router.get("/file-tasks/{task_id}", response_model=ScanResultDetailResponse)
+async def get_file_task_detail(
+    task_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    查看文件扫描结果
+    
+    - **task_id**: 任务ID
+    """
+    task = db.query(FileTask).filter(FileTask.id == task_id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="文件任务不存在")
+    
+    media_file = task.media_file
+    if not media_file:
+        raise HTTPException(status_code=404, detail="媒体文件不存在")
+    
+    return ScanResultDetailResponse(
+        file_name=media_file.file_name,
+        file_size=media_file.file_size,
+        file_type=media_file.media_type,
+        file_path=media_file.file_path,
+        scan_started_at=task.scan_started_at.isoformat() if task.scan_started_at else None,
+        scan_completed_at=task.scan_completed_at.isoformat() if task.scan_completed_at else None,
+        file_encoding_format=task.video_codec,  # 使用视频编码格式作为文件编码格式
+        video_tracks=task.video_tracks or 0,
+        audio_tracks=task.audio_tracks or 0,
+        subtitle_tracks=task.subtitle_tracks or 0,
+        has_external_subtitle=task.has_external_subtitle or False,
+        external_subtitle_name=task.external_subtitle_name,
+        scan_result=task.scan_result,
+        file_hash=media_file.sha256_hash,
+        scan_task_id=task_id,
+        video_codec=task.video_codec,
+        audio_codec=task.audio_codec
+    )
+
+
+@router.post("/file-tasks/{task_id}/rescan")
+async def rescan_file(
+    task_id: int,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db)
 ):
     """
-    创建扫描任务
-
-    - **path_id**: 扫描路径ID（与path二选一）
-    - **path**: 扫描路径（与path_id二选一）
-    - **recursive**: 是否递归扫描
-    - **scan_type**: 扫描类型 (incremental/full)
+    重新扫描文件（只扫描该文件，不扫描整个目录）
+    
+    - **task_id**: 任务ID
     """
-    # 确定扫描路径
-    scan_path = None
-    if request.path_id:
-        # 使用路径ID
-        scan_path = db.query(ScanPath).filter(ScanPath.id == request.path_id).first()
-        if not scan_path:
-            raise HTTPException(status_code=404, detail="扫描路径不存在")
-        if not scan_path.enabled:
-            raise HTTPException(status_code=400, detail="扫描路径未启用")
-        target_path = scan_path.path
-        recursive = scan_path.recursive if request.recursive is None else request.recursive
-    elif request.path:
-        # 使用直接路径
-        target_path = request.path
-        recursive = request.recursive
+    task = db.query(FileTask).filter(FileTask.id == task_id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="文件任务不存在")
+    
+    media_file = task.media_file
+    if not media_file:
+        raise HTTPException(status_code=404, detail="媒体文件不存在")
+    
+    # 查找文件所在路径的扫描策略
+    scan_path = db.query(ScanPath).filter(
+        ScanPath.path.like(f"{task.target_path}%")
+    ).first()
+    
+    if scan_path:
+        scan_type = scan_path.scan_type
+        recursive = scan_path.recursive
+        skip_strategy = scan_path.skip_strategy
+        scan_subdirectories = scan_path.scan_subdirectories
+        scan_debounce_time = scan_path.scan_debounce_time
     else:
-        raise HTTPException(status_code=400, detail="必须指定path_id或path")
-
-    # 验证路径
+        # 使用默认扫描策略
+        from app.core.config import config_manager
+        scanner_config = config_manager.get("scanner", {})
+        scan_type = scanner_config.get("default_scan_type", "incremental")
+        recursive = scanner_config.get("default_recursive", True)
+        skip_strategy = scanner_config.get("default_skip_strategy", "keyword")
+        scan_subdirectories = True
+        scan_debounce_time = 30
+    
+    # 删除与该文件有关的所有扫描记录
+    media_file_id = media_file.id
+    db.query(FileTask).filter(FileTask.media_file_id == media_file_id).delete()
+    db.query(SubtitleFile).filter(SubtitleFile.media_file_id == media_file_id).delete()
+    db.delete(media_file)
+    db.commit()
+    
+    # 只扫描单个文件，不扫描整个目录
     from pathlib import Path
-    path_obj = Path(target_path)
-    if not path_obj.exists():
-        raise HTTPException(status_code=404, detail="扫描路径不存在")
-    if not path_obj.is_dir():
-        raise HTTPException(status_code=400, detail="扫描路径不是目录")
-
-    # 生成批次ID
-    import uuid
-    batch_id = str(uuid.uuid4())
-
-    # 创建扫描历史记录（初始状态）
-    scan_history = ScanHistory(
-        batch_id=batch_id,
-        target_path=target_path,
-        scan_type=request.scan_type,
+    file_path = Path(media_file.file_path)
+    
+    # 创建新的扫描任务，只扫描该文件
+    scan_manager = get_scan_manager()
+    new_task_id = scan_manager.start_scan(
+        target_path=task.target_path,
+        scan_type=scan_type,
         recursive=recursive,
-        started_at=datetime.now()
+        skip_strategy=skip_strategy,
+        scan_subdirectories=scan_subdirectories,
+        scan_debounce_time=scan_debounce_time,
+        files=[file_path]  # 只扫描指定的文件
     )
-    db.add(scan_history)
-    db.commit()
     
-    task_id = scan_history.id
-
-    # 创建扫描进度记录
-    scan_progress = ScanProgress(
-        batch_id=batch_id,
-        task_id=task_id,
-        target_path=target_path,
-        scan_type=request.scan_type,
-        status="pending",
-        started_at=datetime.now()
-    )
-    db.add(scan_progress)
-    db.commit()
-
-    # 创建扫描器实例
-    scanner = FileScanner(task_id=task_id, batch_id=batch_id, skip_mode=request.skip_mode)
-
-    # 在后台任务中执行扫描
-    async def scan_task():
-        try:
-            # 更新状态为运行中
-            with get_db_context() as db:
-                db.query(ScanProgress).filter_by(batch_id=batch_id).update({
-                    "status": "running"
-                })
-                db.commit()
-            
-            await manager.send_progress(task_id, {
-                "batch_id": batch_id,
-                "task_id": task_id,
-                "status": "running"
-            })
-            
-            scan_history = await scanner.scan_directory(
-                path=target_path,
-                recursive=recursive,
-                scan_type=request.scan_type,
-                batch_id=batch_id
-            )
-            logger.info(f"扫描任务完成: {batch_id}")
-
-            # 更新扫描路径的最后扫描时间
-            if request.path_id:
-                with get_db_context() as db:
-                    db.query(ScanPath).filter(ScanPath.id == request.path_id).update({
-                        "last_scan_at": datetime.now(),
-                        "last_scan_batch_id": batch_id
-                    })
-                    db.commit()
-        except Exception as e:
-            logger.error(f"扫描任务失败: {batch_id}, 错误: {e}")
-            # 更新扫描历史记录的错误信息
-            with get_db_context() as db:
-                db.query(ScanHistory).filter(ScanHistory.batch_id == batch_id).update({
-                    "error_message": str(e),
-                    "completed_at": datetime.now()
-                })
-                db.commit()
-
-    # 添加后台任务
-    background_tasks.add_task(scan_task)
-
     return {
-        "task_id": scan_history.id,
-        "batch_id": batch_id,
-        "status": "accepted",
-        "message": "扫描任务已创建，正在后台执行"
+        "task_id": new_task_id,
+        "message": "重新扫描任务已创建"
     }
 
 
-@router.post("/tasks/{task_id}/stop")
-async def stop_scan_task(
+@router.post("/file-tasks/{task_id}/stop")
+async def stop_file_scan(
     task_id: int,
     db: Session = Depends(get_db)
 ):
     """
-    停止扫描任务（等待实际停止）
-
+    停止扫描文件
+    
     - **task_id**: 任务ID
     """
-    import time
-    
-    task = db.query(ScanHistory).filter(ScanHistory.id == task_id).first()
+    task = db.query(FileTask).filter(FileTask.id == task_id).first()
     if not task:
-        raise HTTPException(status_code=404, detail="扫描任务不存在")
-
-    if task.completed_at:
-        raise HTTPException(status_code=400, detail="任务已完成或已停止")
-
-    # 标记任务为停止中
-    stop_requested_at = datetime.now()
+        raise HTTPException(status_code=404, detail="文件任务不存在")
     
-    # 更新扫描进度状态为停止中
-    with get_db_context() as progress_db:
-        progress_db.query(ScanProgress).filter_by(task_id=task_id).update({
-            "status": "stopping"
-        })
-        progress_db.commit()
-
-    logger.info(f"请求停止扫描任务: {task_id} at {stop_requested_at}")
-
-    # 等待实际停止
-    timeout_seconds = 60
-    elapsed = 0
-    check_interval = 1  # 每秒检查一次
-
-    while elapsed < timeout_seconds:
-        # 刷新任务状态
-        db.refresh(task)
-        
-        # 检查任务是否已完成
-        if task.completed_at:
-            stop_time = task.completed_at
-            stop_duration = int((stop_time - stop_requested_at).total_seconds())
-            
-            # 更新扫描进度为已停止
-            with get_db_context() as progress_db:
-                progress_db.query(ScanProgress).filter_by(task_id=task_id).update({
-                    "status": "stopped",
-                    "completed_at": stop_time
-                })
-                progress_db.commit()
-            
-            logger.info(f"扫描任务已停止: {task_id}, 耗时: {stop_duration}秒")
-            
-            return {
-                "success": True,
-                "message": "扫描任务已停止",
-                "stop_time": stop_time.isoformat(),
-                "stop_duration": stop_duration
-            }
-        
-        # 等待一段时间再检查
-        time.sleep(check_interval)
-        elapsed += check_interval
-
-    # 超时处理
-    logger.warning(f"停止任务超时: {task_id}, 已等待{timeout_seconds}秒")
+    if task.status not in ["scanning", "pending"]:
+        raise HTTPException(status_code=400, detail="任务不在运行中")
     
-    # 返回部分成功
-    return {
-        "success": False,
-        "message": "停止请求已发送，但任务可能仍在运行中", 
-        "stop_requested_at": stop_requested_at.isoformat(),
-        "timeout": timeout_seconds
-    }
-
-
-@router.post("/tasks/{task_id}/retry")
-async def retry_scan_task(
-    task_id: int,
-    background_tasks: BackgroundTasks,
-    db: Session = Depends(get_db),
-    options: RescanOptions = None
-):
-    # 如果没有提供 options，使用默认值
-    if options is None:
-        options = RescanOptions()
-    """
-    重新扫描任务（仅对选中任务涉及的文件进行重新扫描）
-
-    - **task_id**: 任务ID
-    - **options**: 重新扫描选项
-    """
-    original_task = db.query(ScanHistory).filter(ScanHistory.id == task_id).first()
-    if not original_task:
-        raise HTTPException(status_code=404, detail="扫描任务不存在")
-
-    # 查询该任务扫描到的所有文件
-    scanned_files = db.query(MediaFile).filter(
-        MediaFile.scan_batch_id == original_task.batch_id
-    ).all()
-    
-    if not scanned_files:
-        # 如果没有扫描到任何文件，重新执行完整扫描
-        logger.info(f"任务 {task_id} 没有扫描到任何文件，重新执行完整扫描")
-
-        # 生成新的批次ID
-        import uuid
-        batch_id = str(uuid.uuid4())
-
-        # 创建扫描历史记录
-        scan_history = ScanHistory(
-            batch_id=batch_id,
-            target_path=original_task.target_path,
-            scan_type="full",
-            recursive=original_task.recursive,
-            started_at=datetime.now()
-        )
-        db.add(scan_history)
-        db.commit()
-
-        # 创建扫描进度记录
-        scan_progress = ScanProgress(
-            batch_id=batch_id,
-            task_id=scan_history.id,
-            target_path=original_task.target_path,
-            scan_type="full",
-            status="pending",
-            started_at=datetime.now()
-        )
-        db.add(scan_progress)
-        db.commit()
-
-        # 创建扫描器实例
-        # 根据 RescanOptions 确定跳过模式
-        skip_mode = "none"
-        if options.skip_keywords and options.skip_scanned:
-            skip_mode = "record"
-        elif options.skip_keywords:
-            skip_mode = "keyword"
-
-        scanner = FileScanner(task_id=scan_history.id, batch_id=batch_id, skip_mode=skip_mode)
-
-        # 在后台任务中执行扫描
-        async def scan_task():
-            try:
-                # 更新状态为运行中
-                with get_db_context() as db:
-                    db.query(ScanProgress).filter_by(batch_id=batch_id).update({
-                        "status": "running"
-                    })
-                    db.commit()
-
-                await manager.send_progress(scan_history.id, {
-                    "batch_id": batch_id,
-                    "task_id": scan_history.id,
-                    "status": "running"
-                })
-
-                await scanner.scan_directory(
-                    path=original_task.target_path,
-                    recursive=original_task.recursive,
-                    scan_type="full",
-                    batch_id=batch_id
-                )
-                logger.info(f"重新扫描任务完成: {batch_id}")
-            except Exception as e:
-                logger.error(f"重新扫描任务失败: {batch_id}, 错误: {e}")
-                # 更新扫描历史记录的错误信息
-                with get_db_context() as db:
-                    db.query(ScanHistory).filter(ScanHistory.batch_id == batch_id).update({
-                        "error_message": str(e),
-                        "completed_at": datetime.now()
-                    })
-                    db.commit()
-
-        # 添加后台任务
-        background_tasks.add_task(scan_task)
-
-        return {
-            "task_id": scan_history.id,
-            "batch_id": batch_id,
-            "status": "accepted",
-            "message": "重新扫描任务已创建，正在后台执行"
-        }
-
-    # 根据重新扫描选项过滤文件
-    files_to_rescan = []
-    if options.rescan_type == "all":
-        # 重新扫描所有文件
-        files_to_rescan = scanned_files
-    elif options.rescan_type == "failed":
-        # 仅重新扫描失败的文件（假设未扫描的文件为失败）
-        files_to_rescan = [f for f in scanned_files if not f.scanned_at]
-    elif options.rescan_type == "selected":
-        # 仅重新扫描指定的文件
-        files_to_rescan = [f for f in scanned_files if f.file_path in options.file_list]
-    else:
-        files_to_rescan = scanned_files
-
-    if not files_to_rescan:
-        raise HTTPException(status_code=404, detail="没有符合条件的文件需要重新扫描")
-
-    # 生成新的批次ID
-    import uuid
-    batch_id = str(uuid.uuid4())
-
-    # 创建扫描历史记录
-    scan_history = ScanHistory(
-        batch_id=batch_id,
-        target_path=original_task.target_path,
-        scan_type="rescan",  # 使用重新扫描类型
-        recursive=original_task.recursive,
-        started_at=datetime.now()
-    )
-    db.add(scan_history)
+    # 更新任务状态为停止
+    task.status = "stopped"
+    task.scan_error = "用户停止"
     db.commit()
-
-    # 创建新的扫描任务
-    scanner = FileScanner()
     
-    # 初始化扫描器属性
-    scanner.batch_id = batch_id
-    scanner.task_id = scan_history.id
-    scanner.scanned_files = set()
-    scanner.new_files = []
-    scanner.updated_files = []
-    scanner.failed_files = []
-    scanner.skipped_files = 0
-    scanner.total_files = len(files_to_rescan)
-
-    # 在后台任务中执行扫描
-    def scan_task():
-        try:
-            # 只对选中任务涉及的文件进行重新扫描
-            for media_file in files_to_rescan:
-                file_path = Path(media_file.file_path)
-                if file_path.exists():
-                    # 重新处理文件
-                    scanner._process_media_file(file_path, "rescan")
-            
-            # 更新扫描历史记录
-            with get_db_context() as db:
-                db.query(ScanHistory).filter(ScanHistory.batch_id == batch_id).update({
-                    "total_files": len(files_to_rescan),
-                    "new_files": 0,  # 重新扫描不算新增
-                    "updated_files": len(scanner.updated_files),
-                    "skipped_files": 0,
-                    "failed_files": len(scanner.failed_files),
-                    "completed_at": datetime.now()
-                })
-                db.commit()
-            
-            logger.info(f"重新扫描任务完成: {batch_id}, 共处理 {len(files_to_rescan)} 个文件")
-        except Exception as e:
-            logger.error(f"重新扫描任务失败: {batch_id}, 错误: {e}")
-            # 更新扫描历史记录的错误信息
-            with get_db_context() as db:
-                db.query(ScanHistory).filter(ScanHistory.batch_id == batch_id).update({
-                    "error_message": str(e),
-                    "completed_at": datetime.now()
-                })
-                db.commit()
-
-    # 添加后台任务
-    background_tasks.add_task(scan_task)
-
-    return {
-        "task_id": scan_history.id,
-        "batch_id": batch_id,
-        "status": "accepted",
-        "message": f"重新扫描任务已创建，将对 {len(files_to_rescan)} 个文件进行重新扫描"
-    }
+    # 删除与该文件有关的所有扫描记录
+    # 1. 删除文件任务记录
+    db.query(FileTask).filter(FileTask.id == task_id).delete()
+    # 2. 删除媒体文件记录
+    if task.media_file:
+        media_file_id = task.media_file.id
+        db.query(SubtitleFile).filter(SubtitleFile.media_file_id == media_file_id).delete()
+        db.delete(task.media_file)
+    db.commit()
+    
+    return {"message": "文件扫描已停止"}
 
 
-@router.delete("/tasks/{task_id}")
-async def delete_scan_task(
+@router.delete("/file-tasks/{task_id}")
+async def delete_file_scan_result(
     task_id: int,
     db: Session = Depends(get_db)
 ):
     """
-    删除扫描任务
-
+    删除扫描结果
+    
     - **task_id**: 任务ID
     """
-    task = db.query(ScanHistory).filter(ScanHistory.id == task_id).first()
+    task = db.query(FileTask).filter(FileTask.id == task_id).first()
     if not task:
-        raise HTTPException(status_code=404, detail="扫描任务不存在")
-
-    # 检查任务是否正在运行
-    if not task.completed_at:
-        raise HTTPException(status_code=400, detail="无法删除正在运行的扫描任务")
-
-    # 删除关联的扫描进度记录
-    db.query(ScanProgress).filter(ScanProgress.task_id == task_id).delete()
+        raise HTTPException(status_code=404, detail="文件任务不存在")
     
-    # 删除扫描任务记录
-    db.delete(task)
+    if task.status != "scanned":
+        raise HTTPException(status_code=400, detail="只能删除已完成扫描的文件结果")
+    
+    # 删除与该文件有关的所有扫描记录
+    # 1. 删除文件任务记录
+    db.query(FileTask).filter(FileTask.media_file_id == task.media_file_id).delete()
+    # 2. 删除媒体文件记录
+    if task.media_file:
+        media_file_id = task.media_file.id
+        db.query(SubtitleFile).filter(SubtitleFile.media_file_id == media_file_id).delete()
+        db.delete(task.media_file)
     db.commit()
-
-    logger.info(f"删除扫描任务: {task_id}")
-
-    return {"message": "扫描任务已删除"}
-
-
-# ========== 文件系统监控 ==========
-
-
-# 全局监控器字典: path_id -> FileMonitor
-_monitors = {}
-
-
-@router.post("/monitoring/{path_id}/start")
-async def start_monitoring(
-    path_id: int,
-    db: Session = Depends(get_db)
-):
-    """
-    启动文件系统监控
-
-    - **path_id**: 扫描路径ID
-    """
-    # 查询扫描路径
-    scan_path = db.query(ScanPath).filter(ScanPath.id == path_id).first()
-    if not scan_path:
-        raise HTTPException(status_code=404, detail="扫描路径不存在")
     
-    if not scan_path.enabled:
-        raise HTTPException(status_code=400, detail="扫描路径未启用")
-    
-    # 检查监控是否已在运行
-    if path_id in _monitors:
-        raise HTTPException(status_code=400, detail="该路径的监控已在运行")
-    
-    try:
-        # 导入文件监控模块
-        from app.modules.scanner.file_monitor import FileMonitor
-        
-        # 定义监控回调函数
-        def on_file_change(event_type: str, file_path: str):
-            """文件变化回调"""
-            logger.info(f"监控到文件变化: {event_type} - {file_path}")
-            
-            # TODO: 根据变化类型触发相应的扫描或处理
-            # 例如：
-            # - created: 创建新文件，触发扫描
-            # - modified: 文件修改，触发重新识别
-            # - deleted: 文件删除，更新数据库
-        
-        # 创建监控器
-        monitor = FileMonitor(
-            path=scan_path.path,
-            callback=on_file_change,
-            debounce_seconds=scan_path.monitoring_debounce if hasattr(scan_path, 'monitoring_debounce') else 5
-        )
-        
-        # 启动监控
-        monitor.start()
-        
-        # 保存监控器
-        _monitors[path_id] = monitor
-        
-        logger.info(f"已启动文件系统监控: path_id={path_id}, path={scan_path.path}")
-        
-        return {
-            "success": True,
-            "message": "文件系统监控已启动",
-            "path_id": path_id,
-            "path": scan_path.path
-        }
-    
-    except Exception as e:
-        logger.error(f"启动文件系统监控失败: {e}")
-        raise HTTPException(status_code=500, detail=f"启动监控失败: {str(e)}")
-
-
-@router.post("/monitoring/{path_id}/stop")
-async def stop_monitoring(
-    path_id: int,
-    db: Session = Depends(get_db)
-):
-    """
-    停止文件系统监控
-
-    - **path_id**: 扫描路径ID
-    """
-    # 查询扫描路径
-    scan_path = db.query(ScanPath).filter(ScanPath.id == path_id).first()
-    if not scan_path:
-        raise HTTPException(status_code=404, detail="扫描路径不存在")
-    
-    # 检查监控是否在运行
-    if path_id not in _monitors:
-        raise HTTPException(status_code=400, detail="该路径的监控未在运行")
-    
-    try:
-        # 停止监控器
-        monitor = _monitors[path_id]
-        monitor.stop()
-        
-        # 从监控器字典中移除
-        del _monitors[path_id]
-        
-        logger.info(f"已停止文件系统监控: path_id={path_id}, path={scan_path.path}")
-        
-        return {
-            "success": True,
-            "message": "文件系统监控已停止",
-            "path_id": path_id
-        }
-    
-    except Exception as e:
-        logger.error(f"停止文件系统监控失败: {e}")
-        raise HTTPException(status_code=500, detail=f"停止监控失败: {str(e)}")
-
-
-@router.get("/monitoring/{path_id}/status")
-async def get_monitoring_status(
-    path_id: int,
-    db: Session = Depends(get_db)
-):
-    """
-    获取文件系统监控状态
-
-    - **path_id**: 扫描路径ID
-    """
-    # 查询扫描路径
-    scan_path = db.query(ScanPath).filter(ScanPath.id == path_id).first()
-    if not scan_path:
-        raise HTTPException(status_code=404, detail="扫描路径不存在")
-    
-    # 检查监控状态
-    is_running = path_id in _monitors
-    is_alive = False
-    
-    if is_running:
-        is_alive = _monitors[path_id].is_alive()
-    
-    return {
-        "path_id": path_id,
-        "path": scan_path.path,
-        "is_running": is_running,
-        "is_alive": is_alive,
-        "monitoring_enabled": getattr(scan_path, 'monitoring_enabled', False),
-        "monitoring_debounce": getattr(scan_path, 'monitoring_debounce', 5)
-    }
-
-
-@router.get("/monitoring")
-async def list_monitoring_status(db: Session = Depends(get_db)):
-    """
-    获取所有路径的监控状态
-    """
-    paths = db.query(ScanPath).all()
-    
-    status_list = []
-    for path in paths:
-        is_running = path.id in _monitors
-        is_alive = False
-        
-        if is_running:
-            is_alive = _monitors[path.id].is_alive()
-        
-        status_list.append({
-            "path_id": path.id,
-            "path": path.path,
-            "is_running": is_running,
-            "is_alive": is_alive,
-            "monitoring_enabled": getattr(path, 'monitoring_enabled', False),
-            "monitoring_debounce": getattr(path, 'monitoring_debounce', 5)
-        })
-    
-    return {
-        "total": len(status_list),
-        "running": sum(1 for s in status_list if s["is_running"]),
-        "items": status_list
-    }
+    return {"message": "扫描结果已删除"}
 
 
 # ========== 批量操作 ==========
 
 
-class BatchStopRequest(BaseModel):
-    """批量停止任务请求"""
-    task_ids: List[int]
+class BatchFileOperationRequest(BaseModel):
+    """批量文件操作请求 - 基于媒体文件ID"""
+    model_config = ConfigDict(str_strip_whitespace=True)
+    media_file_ids: List[Union[int, str]]
+    
+    def get_int_ids(self) -> List[int]:
+        """获取转换后的整数ID列表"""
+        result = []
+        for item in self.media_file_ids:
+            try:
+                if isinstance(item, str):
+                    result.append(int(item))
+                elif isinstance(item, (int, float)):
+                    result.append(int(item))
+                else:
+                    raise ValueError(f"无效的ID类型: {type(item)}")
+            except (ValueError, TypeError) as e:
+                raise ValueError(f"无法将 '{item}' 转换为整数: {e}")
+        return result
 
 
-@router.post("/tasks/batch/stop")
-async def batch_stop_tasks(
-    request: BatchStopRequest,
+# ========== 媒体文件操作（基于media_file_id）==========
+
+
+@router.post("/files/{media_file_id}/rescan")
+async def rescan_media_file(
+    media_file_id: int,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db)
 ):
     """
-    批量停止扫描任务
-
-    - **task_ids**: 任务ID列表
+    重新扫描媒体文件（基于media_file_id）
+    
+    - **media_file_id**: 媒体文件ID
     """
-    import time
+    # 查找媒体文件
+    media_file = db.query(MediaFile).filter(MediaFile.id == media_file_id).first()
+    if not media_file:
+        raise HTTPException(status_code=404, detail="媒体文件不存在")
+    
+    # 查找文件所在路径的扫描策略
+    scan_path = db.query(ScanPath).filter(
+        ScanPath.path.like(f"{media_file.file_path}%")
+    ).first()
+    
+    if scan_path:
+        scan_type = scan_path.scan_type
+        recursive = scan_path.recursive
+        skip_strategy = scan_path.skip_strategy
+        scan_subdirectories = scan_path.scan_subdirectories
+        scan_debounce_time = scan_path.scan_debounce_time
+        target_path = scan_path.path
+    else:
+        # 使用默认扫描策略
+        from app.core.config import config_manager
+        scanner_config = config_manager.get("scanner", {})
+        scan_type = scanner_config.get("default_scan_type", "incremental")
+        recursive = scanner_config.get("default_recursive", True)
+        skip_strategy = scanner_config.get("default_skip_strategy", "keyword")
+        scan_subdirectories = True
+        scan_debounce_time = 30
+        # 从文件路径提取目录
+        target_path = str(Path(media_file.file_path).parent)
+    
+    # 删除与该文件有关的所有扫描记录
+    db.query(FileTask).filter(FileTask.media_file_id == media_file_id).delete()
+    db.query(SubtitleFile).filter(SubtitleFile.media_file_id == media_file_id).delete()
+    db.delete(media_file)
+    db.commit()
+    
+    # 只扫描单个文件，不扫描整个目录
+    file_path = Path(media_file.file_path)
+    
+    # 创建新的扫描任务，只扫描该文件
+    scan_manager = get_scan_manager()
+    new_task_id = scan_manager.start_scan(
+        target_path=target_path,
+        scan_type=scan_type,
+        recursive=recursive,
+        skip_strategy=skip_strategy,
+        scan_subdirectories=scan_subdirectories,
+        scan_debounce_time=scan_debounce_time,
+        files=[file_path]  # 只扫描指定的文件
+    )
+    
+    return {
+        "media_file_id": media_file_id,
+        "task_id": new_task_id,
+        "message": "重新扫描任务已创建"
+    }
+
+
+@router.post("/files/{media_file_id}/stop")
+async def stop_media_file_scan(
+    media_file_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    停止扫描媒体文件（基于media_file_id）
+    
+    - **media_file_id**: 媒体文件ID
+    """
+    # 查找媒体文件
+    media_file = db.query(MediaFile).filter(MediaFile.id == media_file_id).first()
+    if not media_file:
+        raise HTTPException(status_code=404, detail="媒体文件不存在")
+    
+    # 查找该文件的任务
+    task = db.query(FileTask).filter(
+        FileTask.media_file_id == media_file_id,
+        FileTask.status.in_(["scanning", "pending"])
+    ).first()
+    
+    if not task:
+        raise HTTPException(status_code=400, detail="任务不在运行中")
+    
+    # 更新任务状态为停止
+    task.status = "stopped"
+    task.scan_error = "用户停止"
+    db.commit()
+    
+    # 删除与该文件有关的所有扫描记录
+    db.query(FileTask).filter(FileTask.media_file_id == media_file_id).delete()
+    db.query(SubtitleFile).filter(SubtitleFile.media_file_id == media_file_id).delete()
+    db.delete(media_file)
+    db.commit()
+    
+    return {"message": "文件扫描已停止"}
+
+
+@router.delete("/files/{media_file_id}")
+async def delete_media_file_scan_result(
+    media_file_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    删除媒体文件扫描结果（基于media_file_id）
+    
+    - **media_file_id**: 媒体文件ID
+    """
+    # 查找媒体文件
+    media_file = db.query(MediaFile).filter(MediaFile.id == media_file_id).first()
+    if not media_file:
+        raise HTTPException(status_code=404, detail="媒体文件不存在")
+    
+    # 检查是否有正在扫描的任务
+    task = db.query(FileTask).filter(
+        FileTask.media_file_id == media_file_id,
+        FileTask.status.in_(["scanning", "pending"])
+    ).first()
+    
+    if task:
+        raise HTTPException(status_code=400, detail="只能删除已完成扫描的文件结果")
+    
+    # 删除与该文件有关的所有扫描记录
+    db.query(FileTask).filter(FileTask.media_file_id == media_file_id).delete()
+    db.query(SubtitleFile).filter(SubtitleFile.media_file_id == media_file_id).delete()
+    db.delete(media_file)
+    db.commit()
+    
+    return {"message": "扫描结果已删除"}
+
+
+# ========== 批量文件操作 ==========
+
+
+@router.post("/files/batch/rescan")
+async def batch_rescan_media_files(
+    request: BatchFileOperationRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    批量重新扫描媒体文件（对每个文件逐一执行）
+    
+    - **media_file_ids**: 媒体文件ID列表
+    """
+    # 转换为整数ID列表
+    media_file_ids = request.get_int_ids()
+    logger.info(f"[批量重新扫描] 收到请求 - media_file_ids={media_file_ids}, count={len(media_file_ids) if media_file_ids else 0}")
+    
+    if not media_file_ids or len(media_file_ids) == 0:
+        raise HTTPException(status_code=400, detail="媒体文件ID列表不能为空")
     
     results = []
     
-    for task_id in request.task_ids:
+    # 对每个文件逐一执行重新扫描操作
+    for media_file_id in media_file_ids:
         try:
-            task = db.query(ScanHistory).filter(ScanHistory.id == task_id).first()
+            # 查找媒体文件
+            media_file = db.query(MediaFile).filter(MediaFile.id == media_file_id).first()
+            if not media_file:
+                results.append({
+                    "media_file_id": media_file_id,
+                    "success": False,
+                    "message": "媒体文件不存在"
+                })
+                continue
+            
+            # 查找文件所在路径的扫描策略
+            scan_path = db.query(ScanPath).filter(
+                ScanPath.path.like(f"{media_file.file_path}%")
+            ).first()
+            
+            if scan_path:
+                scan_type = scan_path.scan_type
+                recursive = scan_path.recursive
+                skip_strategy = scan_path.skip_strategy
+                scan_subdirectories = scan_path.scan_subdirectories
+                scan_debounce_time = scan_path.scan_debounce_time
+                target_path = scan_path.path
+            else:
+                # 使用默认扫描策略
+                from app.core.config import config_manager
+                scanner_config = config_manager.get("scanner", {})
+                scan_type = scanner_config.get("default_scan_type", "incremental")
+                recursive = scanner_config.get("default_recursive", True)
+                skip_strategy = scanner_config.get("default_skip_strategy", "keyword")
+                scan_subdirectories = True
+                scan_debounce_time = 30
+                # 从文件路径提取目录
+                target_path = str(Path(media_file.file_path).parent)
+            
+            # 删除与该文件有关的所有扫描记录
+            file_path = Path(media_file.file_path)
+            db.query(FileTask).filter(FileTask.media_file_id == media_file_id).delete()
+            db.query(SubtitleFile).filter(SubtitleFile.media_file_id == media_file_id).delete()
+            db.delete(media_file)
+            db.commit()
+            
+            # 只扫描单个文件，不扫描整个目录
+            scan_manager = get_scan_manager()
+            new_task_id = scan_manager.start_scan(
+                target_path=target_path,
+                scan_type=scan_type,
+                recursive=recursive,
+                skip_strategy=skip_strategy,
+                scan_subdirectories=scan_subdirectories,
+                scan_debounce_time=scan_debounce_time,
+                files=[file_path]  # 只扫描指定的文件
+            )
+            
+            results.append({
+                "media_file_id": media_file_id,
+                "success": True,
+                "task_id": new_task_id,
+                "message": "重新扫描任务已创建"
+            })
+            
+        except Exception as e:
+            logger.error(f"批量重新扫描失败: media_file_id={media_file_id}, 错误: {e}")
+            results.append({
+                "media_file_id": media_file_id,
+                "success": False,
+                "message": f"重新扫描失败: {str(e)}"
+            })
+    
+    return {
+        "total": len(media_file_ids),
+        "success": sum(1 for r in results if r["success"]),
+        "failed": sum(1 for r in results if not r["success"]),
+        "results": results
+    }
+    
+
+@router.post("/files/batch/stop")
+async def batch_stop_media_file_scans(
+    request: BatchFileOperationRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    批量停止扫描媒体文件（对每个文件逐一执行）
+    
+    - **media_file_ids**: 媒体文件ID列表
+    """
+    # 转换为整数ID列表
+    media_file_ids = request.get_int_ids()
+    logger.info(f"[批量停止扫描] 收到请求 - media_file_ids={media_file_ids}, count={len(media_file_ids) if media_file_ids else 0}")
+    
+    if not media_file_ids or len(media_file_ids) == 0:
+        raise HTTPException(status_code=400, detail="媒体文件ID列表不能为空")
+    
+    results = []
+    
+    # 对每个文件逐一执行停止扫描操作
+    for media_file_id in media_file_ids:
+        try:
+            # 查找媒体文件
+            media_file = db.query(MediaFile).filter(MediaFile.id == media_file_id).first()
+            if not media_file:
+                results.append({
+                    "media_file_id": media_file_id,
+                    "success": False,
+                    "message": "媒体文件不存在"
+                })
+                continue
+            
+            # 查找该文件的任务
+            task = db.query(FileTask).filter(
+                FileTask.media_file_id == media_file_id,
+                FileTask.status.in_(["scanning", "pending"])
+            ).first()
+            
             if not task:
                 results.append({
-                    "task_id": task_id,
+                    "media_file_id": media_file_id,
                     "success": False,
-                    "message": "任务不存在"
+                    "message": "任务不在运行中"
                 })
                 continue
             
-            if task.completed_at:
-                results.append({
-                    "task_id": task_id,
-                    "success": False,
-                    "message": "任务已完成或已停止"
-                })
-                continue
+            # 更新任务状态为停止
+            task.status = "stopped"
+            task.scan_error = "用户停止"
+            db.commit()
             
-            # 标记任务为停止中
-            stop_requested_at = datetime.now()
+            # 删除与该文件有关的所有扫描记录
+            db.query(FileTask).filter(FileTask.media_file_id == media_file_id).delete()
+            db.query(SubtitleFile).filter(SubtitleFile.media_file_id == media_file_id).delete()
+            db.delete(media_file)
+            db.commit()
             
-            # 更新扫描进度状态为停止中
-            with get_db_context() as progress_db:
-                progress_db.query(ScanProgress).filter_by(task_id=task_id).update({
-                    "status": "stopping"
-                })
-                progress_db.commit()
-            
-            logger.info(f"请求停止扫描任务: {task_id} at {stop_requested_at}")
-            
-            # 等待实际停止
-            timeout_seconds = 60
-            elapsed = 0
-            check_interval = 1
-            
-            stopped = False
-            while elapsed < timeout_seconds:
-                db.refresh(task)
-                if task.completed_at:
-                    stop_time = task.completed_at
-                    stop_duration = int((stop_time - stop_requested_at).total_seconds())
-                    
-                    # 更新扫描进度为已停止
-                    with get_db_context() as progress_db:
-                        progress_db.query(ScanProgress).filter_by(task_id=task_id).update({
-                            "status": "stopped",
-                            "completed_at": stop_time
-                        })
-                        progress_db.commit()
-                    
-                    logger.info(f"扫描任务已停止: {task_id}, 耗时: {stop_duration}秒")
-                    
-                    results.append({
-                        "task_id": task_id,
-                        "success": True,
-                        "message": "扫描任务已停止",
-                        "stop_time": stop_time.isoformat(),
-                        "stop_duration": stop_duration
-                    })
-                    stopped = True
-                    break
-                
-                time.sleep(check_interval)
-                elapsed += check_interval
-            
-            if not stopped:
-                logger.warning(f"停止任务超时: {task_id}, 已等待{timeout_seconds}秒")
-                results.append({
-                    "task_id": task_id,
-                    "success": False,
-                    "message": "停止请求已发送，但任务可能仍在运行中",
-                    "stop_requested_at": stop_requested_at.isoformat(),
-                    "timeout": timeout_seconds
-                })
-        
-        except Exception as e:
-            logger.error(f"批量停止任务失败: {task_id}, 错误: {e}")
             results.append({
-                "task_id": task_id,
+                "media_file_id": media_file_id,
+                "success": True,
+                "message": "文件扫描已停止"
+            })
+            
+        except Exception as e:
+            logger.error(f"批量停止扫描失败: media_file_id={media_file_id}, 错误: {e}")
+            results.append({
+                "media_file_id": media_file_id,
                 "success": False,
                 "message": f"停止失败: {str(e)}"
             })
     
     return {
-        "total": len(request.task_ids),
+        "total": len(media_file_ids),
         "success": sum(1 for r in results if r["success"]),
         "failed": sum(1 for r in results if not r["success"]),
         "results": results
     }
 
 
-class BatchDeleteRequest(BaseModel):
-    """批量删除任务请求"""
-    task_ids: List[int]
-
-
-@router.delete("/tasks/batch")
-async def batch_delete_tasks(
-    request: BatchDeleteRequest,
+@router.delete("/files/batch")
+async def batch_delete_media_file_scan_results(
+    request: BatchFileOperationRequest,
     db: Session = Depends(get_db)
 ):
     """
-    批量删除扫描任务
-
-    - **task_ids**: 任务ID列表
+    批量删除媒体文件扫描结果（对每个文件逐一执行）
+    
+    - **media_file_ids**: 媒体文件ID列表
     """
+    # 转换为整数ID列表
+    media_file_ids = request.get_int_ids()
+    logger.info(f"[批量删除扫描结果] 收到请求 - media_file_ids={media_file_ids}, count={len(media_file_ids) if media_file_ids else 0}")
+    
+    if not media_file_ids or len(media_file_ids) == 0:
+        raise HTTPException(status_code=400, detail="媒体文件ID列表不能为空")
+    
     results = []
     
-    for task_id in request.task_ids:
+    # 对每个文件逐一执行删除扫描结果操作
+    for media_file_id in media_file_ids:
         try:
-            task = db.query(ScanHistory).filter(ScanHistory.id == task_id).first()
-            if not task:
+            # 查找媒体文件
+            media_file = db.query(MediaFile).filter(MediaFile.id == media_file_id).first()
+            if not media_file:
                 results.append({
-                    "task_id": task_id,
+                    "media_file_id": media_file_id,
                     "success": False,
-                    "message": "任务不存在"
+                    "message": "媒体文件不存在"
                 })
                 continue
             
-            # 检查任务是否正在运行
-            if not task.completed_at:
+            # 检查是否有正在扫描的任务
+            task = db.query(FileTask).filter(
+                FileTask.media_file_id == media_file_id,
+                FileTask.status.in_(["scanning", "pending"])
+            ).first()
+            
+            if task:
                 results.append({
-                    "task_id": task_id,
+                    "media_file_id": media_file_id,
                     "success": False,
-                    "message": "无法删除正在运行的扫描任务"
+                    "message": "只能删除已完成扫描的文件结果"
                 })
                 continue
             
-            # 删除关联的扫描进度记录
-            db.query(ScanProgress).filter(ScanProgress.task_id == task_id).delete()
-            
-            # 删除扫描任务记录
-            db.delete(task)
+            # 删除与该文件有关的所有扫描记录
+            db.query(FileTask).filter(FileTask.media_file_id == media_file_id).delete()
+            db.query(SubtitleFile).filter(SubtitleFile.media_file_id == media_file_id).delete()
+            db.delete(media_file)
             db.commit()
             
-            logger.info(f"删除扫描任务: {task_id}")
-            
             results.append({
-                "task_id": task_id,
+                "media_file_id": media_file_id,
                 "success": True,
-                "message": "扫描任务已删除"
+                "message": "扫描结果已删除"
             })
-        
+            
         except Exception as e:
-            logger.error(f"批量删除任务失败: {task_id}, 错误: {e}")
+            logger.error(f"批量删除扫描结果失败: media_file_id={media_file_id}, 错误: {e}")
             results.append({
-                "task_id": task_id,
+                "media_file_id": media_file_id,
                 "success": False,
                 "message": f"删除失败: {str(e)}"
             })
     
     return {
-        "total": len(request.task_ids),
+        "total": len(media_file_ids),
         "success": sum(1 for r in results if r["success"]),
         "failed": sum(1 for r in results if not r["success"]),
         "results": results
     }
-
-
-@router.get("/history")
-async def get_scan_history(
-    limit: int = 20,
-    offset: int = 0,
-    db: Session = Depends(get_db)
-):
-    """
-    获取扫描历史
-
-    - **limit**: 返回数量限制
-    - **offset**: 偏移量
-    """
-    history = db.query(ScanHistory).order_by(
-        ScanHistory.started_at.desc()
-    ).offset(offset).limit(limit).all()
-
-    return {
-        "items": [
-            {
-                "id": h.id,
-                "batch_id": h.batch_id,
-                "target_path": h.target_path,
-                "scan_type": h.scan_type,
-                "recursive": h.recursive,
-                "total_files": h.total_files,
-                "new_files": h.new_files,
-                "updated_files": h.updated_files,
-                "skipped_files": h.skipped_files,
-                "failed_files": h.failed_files,
-                "duration_seconds": h.duration_seconds,
-                "error_message": h.error_message,
-                "started_at": h.started_at.isoformat() if h.started_at else None,
-                "completed_at": h.completed_at.isoformat() if h.completed_at else None,
-                "status": "completed" if h.completed_at else "running"
-            }
-            for h in history
-        ],
-        "total": len(history)
-    }
-
-
-@router.get("/history/{batch_id}")
-async def get_scan_history_detail(
-    batch_id: str,
-    db: Session = Depends(get_db)
-):
-    """
-    获取扫描历史详情
-
-    - **batch_id**: 批次ID
-    """
-    history = db.query(ScanHistory).filter(ScanHistory.batch_id == batch_id).first()
-    if not history:
-        raise HTTPException(status_code=404, detail="扫描历史不存在")
-
-    # 获取该批次扫描的文件
-    files = db.query(MediaFile).filter(MediaFile.scan_batch_id == batch_id).all()
-
-    return {
-        "id": history.id,
-        "batch_id": history.batch_id,
-        "target_path": history.target_path,
-        "scan_type": history.scan_type,
-        "recursive": history.recursive,
-        "total_files": history.total_files,
-        "new_files": history.new_files,
-        "updated_files": history.updated_files,
-        "skipped_files": history.skipped_files,
-        "failed_files": history.failed_files,
-        "duration_seconds": history.duration_seconds,
-        "error_message": history.error_message,
-        "started_at": history.started_at.isoformat() if history.started_at else None,
-        "completed_at": history.completed_at.isoformat() if history.completed_at else None,
-        "status": "completed" if history.completed_at else "running",
-        "files": [
-            {
-                "id": f.id,
-                "file_name": f.file_name,
-                "file_path": f.file_path,
-                "file_size": f.file_size,
-                "media_type": f.media_type,
-                "scanned_at": f.scanned_at.isoformat() if f.scanned_at else None
-            }
-            for f in files
-        ]
-    }
-
-
-# ========== 扫描进度查询 ==========
-
-
-@router.get("/tasks/{task_id}/progress")
-async def get_scan_progress(
-    task_id: int,
-    db: Session = Depends(get_db)
-):
-    """
-    获取扫描任务进度
-
-    - **task_id**: 任务ID
-    """
-    task = db.query(ScanHistory).filter(ScanHistory.id == task_id).first()
-    if not task:
-        raise HTTPException(status_code=404, detail="扫描任务不存在")
-
-    # 获取已扫描的文件数
-    scanned_count = db.query(MediaFile).filter(
-        MediaFile.scan_batch_id == task.batch_id
-    ).count()
-
-    # 计算进度
-    progress = 0
-    if task.total_files and task.total_files > 0:
-        progress = (scanned_count / task.total_files) * 100
-
-    return {
-        "task_id": task.id,
-        "batch_id": task.batch_id,
-        "status": "completed" if task.completed_at else "running",
-        "total_files": task.total_files,
-        "scanned_files": scanned_count,
-        "new_files": task.new_files,
-        "updated_files": task.updated_files,
-        "skipped_files": task.skipped_files,
-        "failed_files": task.failed_files,
-        "progress": round(progress, 2),
-        "started_at": task.started_at.isoformat() if task.started_at else None,
-        "completed_at": task.completed_at.isoformat() if task.completed_at else None,
-        "duration_seconds": task.duration_seconds,
-        "error_message": task.error_message
-    }
-
-
-# ========== 默认扫描策略 ==========
-
-
-class DefaultScanConfig(BaseModel):
-    """默认扫描配置"""
-    scan_type: str = "incremental"  # full/incremental
-    recursive: bool = True
-    skip_keywords: bool = True
-    skip_scanned: bool = False
-    use_ignore_patterns: bool = True
-    monitoring_enabled: bool = False
-    monitoring_debounce: int = 5
-
-
-@router.get("/config/default")
-async def get_default_scan_config():
-    """
-    获取默认扫描策略配置
-
-    返回系统默认的扫描策略配置
-    """
-    return {
-        "scan_type": "incremental",
-        "recursive": True,
-        "skip_keywords": True,
-        "skip_scanned": False,
-        "use_ignore_patterns": True,
-        "monitoring_enabled": False,
-        "monitoring_debounce": 5,
-        "description": "默认扫描策略配置"
-    }
-
-
-@router.put("/config/default")
-async def update_default_scan_config(config: DefaultScanConfig):
-    """
-    更新默认扫描策略配置
-
-    - **scan_type**: 扫描类型 (full/incremental)
-    - **recursive**: 是否递归扫描
-    - **skip_keywords**: 是否跳过关键词库文件
-    - **skip_scanned**: 是否跳过已扫描文件
-    - **use_ignore_patterns**: 是否使用忽略模式
-    - **monitoring_enabled**: 是否启用监控
-    - **monitoring_debounce**: 监控防抖时间（秒）
-    """
-    # TODO: 将配置保存到数据库或配置文件
-    logger.info(f"更新默认扫描策略: {config.dict()}")
-    
-    return {
-        "message": "默认扫描策略已更新",
-        "config": config.dict()
-    }
-
-
-@router.post("/config/default/reset")
-async def reset_default_scan_config():
-    """
-    重置默认扫描策略为系统默认值
-
-    将所有配置项恢复为系统默认值
-    """
-    default_config = {
-        "scan_type": "incremental",
-        "recursive": True,
-        "skip_keywords": True,
-        "skip_scanned": False,
-        "use_ignore_patterns": True,
-        "monitoring_enabled": False,
-        "monitoring_debounce": 5
-    }
-    
-    logger.info("重置默认扫描策略为系统默认值")
-    
-    return {
-        "message": "默认扫描策略已重置",
-        "config": default_config
-    }
-
-
-# ========== 扫描任务调度器 ==========
-
-
-@router.get("/scheduler/status")
-async def get_scheduler_status():
-    """
-    获取调度器状态
-
-    返回调度器的运行状态和所有定时任务
-    """
-    from app.core.scheduler import scheduler
-    
-    return {
-        "is_running": scheduler.is_running,
-        "jobs": scheduler.get_scheduled_jobs(),
-        "total_jobs": len(scheduler.get_scheduled_jobs())
-    }
-
-
-@router.post("/scheduler/start")
-async def start_scheduler():
-    """
-    启动调度器
-
-    启动扫描任务调度器，开始执行定时扫描任务
-    """
-    from app.core.scheduler import scheduler
-    
-    try:
-        scheduler.start()
-        return {
-            "success": True,
-            "message": "调度器已启动",
-            "is_running": scheduler.is_running
-        }
-    except Exception as e:
-        logger.error(f"启动调度器失败: {e}")
-        raise HTTPException(status_code=500, detail=f"启动调度器失败: {str(e)}")
-
-
-@router.post("/scheduler/stop")
-async def stop_scheduler():
-    """
-    停止调度器
-
-    停止扫描任务调度器，暂停所有定时扫描任务
-    """
-    from app.core.scheduler import scheduler
-    
-    try:
-        scheduler.stop()
-        return {
-            "success": True,
-            "message": "调度器已停止",
-            "is_running": scheduler.is_running
-        }
-    except Exception as e:
-        logger.error(f"停止调度器失败: {e}")
-        raise HTTPException(status_code=500, detail=f"停止调度器失败: {str(e)}")
-
-
-@router.get("/scheduler/jobs/{path_id}")
-async def get_scheduled_job(path_id: int):
-    """
-    获取指定路径的定时任务状态
-
-    - **path_id**: 扫描路径ID
-    """
-    from app.core.scheduler import scheduler
-    
-    job_status = scheduler.get_job_status(path_id)
-    
-    if not job_status:
-        raise HTTPException(status_code=404, detail="定时任务不存在")
-    
-    return job_status
-
-
-# ========== 目录浏览 ==========
-
-
-@router.get("/browse")
-async def browse_directory(path: str = ""):
-    """
-    浏览服务器端目录
-
-    - **path**: 要浏览的目录路径（空字符串表示根目录）
-    """
-    from pathlib import Path
-    import platform
-
-    # 获取系统根目录
-    if not path:
-        if platform.system() == "Windows":
-            # Windows: 返回所有可用驱动器
-            drives = []
-            for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
-                drive = f"{letter}:\\"
-                if Path(drive).exists():
-                    drives.append({
-                        "name": drive,
-                        "path": drive,
-                        "is_dir": True,
-                        "size": 0,
-                        "modified_time": None
-                    })
-            return drives
-        else:
-            # Unix-like: 返回根目录
-            path = "/"
-    
-    # 规范化路径
-    try:
-        path_obj = Path(path)
-    except (ValueError, OSError):
-        raise HTTPException(status_code=400, detail="无效的路径")
-    
-    # 检查路径是否存在
-    if not path_obj.exists():
-        raise HTTPException(status_code=404, detail="路径不存在")
-    
-    # 检查是否是目录
-    if not path_obj.is_dir():
-        raise HTTPException(status_code=400, detail="不是目录")
-    
-    # 遍历目录内容
-    items = []
-    try:
-        for entry in path_obj.iterdir():
-            try:
-                # 获取文件信息
-                stat = entry.stat()
-                name = entry.name
-                is_dir = entry.is_dir()
-                size = stat.st_size if not is_dir else 0
-                
-                # 获取修改时间
-                from datetime import datetime
-                modified_time = datetime.fromtimestamp(stat.st_mtime).isoformat()
-                
-                items.append({
-                    "name": name,
-                    "path": str(entry),
-                    "is_dir": is_dir,
-                    "size": size,
-                    "modified_time": modified_time
-                })
-            except (PermissionError, OSError):
-                # 跳过无权限访问的文件/目录
-                continue
-    except PermissionError:
-        raise HTTPException(status_code=403, detail="无权限访问该目录")
-    
-    # 排序：目录在前，文件在后，名称按字母顺序
-    items.sort(key=lambda x: (not x["is_dir"], x["name"].lower()))
-    
-    return items

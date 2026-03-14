@@ -1,4 +1,4 @@
-
+# -*- coding: utf-8 -*-
 """
 本地文件扫描器核心实现
 """
@@ -10,7 +10,7 @@ from datetime import datetime
 from loguru import logger
 from pymediainfo import MediaInfo
 
-from app.db.models import MediaFile, SubtitleFile, ScanHistory, ScanProgress
+from app.db.models import MediaFile, SubtitleFile, ScanHistory, ScanProgress, FileTask
 from app.db import get_db_context
 from app.core.config import config_manager
 from app.core.websocket import manager
@@ -475,6 +475,9 @@ class FileScanner:
             file_path: 媒体文件路径
             scan_type: 扫描类型 (full/incremental/rescan/custom)
         """
+        scan_start_time = datetime.now()
+        file_task = None
+        
         try:
             self.scanned_files.add(file_path)
 
@@ -505,9 +508,33 @@ class FileScanner:
                 if self.skip_mode == 'record' and existing_file and scan_type != 'rescan':
                     self.skipped_files += 1
                     logger.debug(f"跳过已扫描文件（record模式）: {file_path.name}")
+                    # 创建跳过状态的文件任务
+                    if existing_file:
+                        file_task = FileTask(
+                            media_file_id=existing_file.id,
+                            scan_batch_id=self.batch_id,
+                            target_path=str(file_path.parent),
+                            file_name=file_path.name,
+                            status='skipped',
+                            scan_started_at=scan_start_time,
+                            scan_completed_at=datetime.now()
+                        )
+                        db.add(file_task)
+                        db.commit()
                     return
 
                 if existing_file:
+                    # 创建文件任务记录
+                    file_task = FileTask(
+                        media_file_id=existing_file.id,
+                        scan_batch_id=self.batch_id,
+                        target_path=str(file_path.parent),
+                        file_name=file_path.name,
+                        status='scanning',
+                        scan_started_at=scan_start_time
+                    )
+                    db.add(file_task)
+                    
                     # 重新扫描：强制更新文件，不进行任何跳过检查
                     if scan_type == 'rescan':
                         # 强制更新文件元数据
@@ -517,6 +544,10 @@ class FileScanner:
                         existing_file.updated_at = datetime.now()
                         self.updated_files.append(file_data)
                         logger.debug(f"重新扫描文件: {file_path.name}")
+                        
+                        # 更新文件任务状态
+                        file_task.status = 'scanned'
+                        file_task.scan_completed_at = datetime.now()
                         db.commit()
                         return
 
@@ -527,6 +558,11 @@ class FileScanner:
                             existing_file.file_size == file_data['file_size']):
                             self.skipped_files += 1
                             logger.debug(f"文件未变化，跳过: {file_path.name}")
+                            
+                            # 更新文件任务状态为跳过
+                            file_task.status = 'skipped'
+                            file_task.scan_completed_at = datetime.now()
+                            db.commit()
                             return
 
                     # 全量扫描或自定义路径扫描：强制更新数据库
@@ -539,6 +575,10 @@ class FileScanner:
                         existing_file.scanned_at = datetime.now()  # 更新扫描时间
                         self.updated_files.append(file_data)
                         logger.debug(f"强制更新文件: {file_path.name} (扫描类型: {scan_type})")
+                        
+                        # 更新文件任务状态
+                        file_task.status = 'scanned'
+                        file_task.scan_completed_at = datetime.now()
                         db.commit()
                         return
 
@@ -550,6 +590,11 @@ class FileScanner:
                         if existing_file.sha256_hash == file_hash:
                             self.skipped_files += 1
                             logger.debug(f"文件哈希未变化，跳过: {file_path.name}")
+                            
+                            # 更新文件任务状态为跳过
+                            file_task.status = 'skipped'
+                            file_task.scan_completed_at = datetime.now()
+                            db.commit()
                             return
 
                     # 文件已更新
@@ -558,6 +603,10 @@ class FileScanner:
                     existing_file.updated_at = datetime.now()
                     self.updated_files.append(file_data)
                     logger.debug(f"更新文件: {file_path.name}")
+                    
+                    # 更新文件任务状态
+                    file_task.status = 'scanned'
+                    file_task.scan_completed_at = datetime.now()
                 else:
                     # 新文件
                     file_hash = self.calculate_file_hash(file_path)
@@ -566,6 +615,20 @@ class FileScanner:
 
                     new_file = MediaFile(**file_data)
                     db.add(new_file)
+                    db.flush()  # 刷新以获取ID
+                    
+                    # 创建文件任务记录
+                    file_task = FileTask(
+                        media_file_id=new_file.id,
+                        scan_batch_id=self.batch_id,
+                        target_path=str(file_path.parent),
+                        file_name=file_path.name,
+                        status='scanned',
+                        scan_started_at=scan_start_time,
+                        scan_completed_at=datetime.now()
+                    )
+                    db.add(file_task)
+                    
                     self.new_files.append(file_data)
                     logger.debug(f"发现新文件: {file_path.name}")
 

@@ -1,5 +1,7 @@
+# -*- coding: utf-8 -*-
 """
 数据库模型定义
+所有文本字段使用utf8mb4编码以支持完整的Unicode字符
 """
 from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, Text, ForeignKey, Date, JSON
 from sqlalchemy.orm import relationship
@@ -18,7 +20,7 @@ class MediaFile(Base):
     file_stem = Column(String(255), nullable=True)
     file_extension = Column(String(20), nullable=True)
     file_size = Column(Integer, nullable=True, default=0)
-    sha256_hash = Column(String(64), nullable=True, index=True)
+    sha256_hash = Column(String(64), nullable=True, index=True, unique=True)
     media_type = Column(String(20), nullable=True, index=True)
     create_time = Column(DateTime, nullable=True)
     modify_time = Column(DateTime, nullable=True, index=True)
@@ -34,6 +36,12 @@ class MediaFile(Base):
     audio_bitrate = Column(Integer, nullable=True, default=0)
     has_embedded_subtitle = Column(String(20), nullable=True, default="unknown")
     embedded_subtitle_langs = Column(String(100), nullable=True)
+    
+    # 轨道信息
+    video_tracks = Column(Integer, nullable=True, default=0)
+    audio_tracks = Column(Integer, nullable=True, default=0)
+    subtitle_tracks = Column(Integer, nullable=True, default=0)
+    
     scan_batch_id = Column(String(36), nullable=True, index=True)
     scanned_at = Column(DateTime, nullable=True, default=datetime.now)
     updated_at = Column(DateTime, nullable=True, default=datetime.now, onupdate=datetime.now)
@@ -133,11 +141,18 @@ class ScanPath(Base):
     # 扫描策略配置
     scan_type = Column(String(20), nullable=False, default="incremental")  # full/incremental
     recursive = Column(Boolean, nullable=True, default=True)
-    scan_interval = Column(Integer, nullable=True, default=300)  # 扫描间隔（秒）
-
+    skip_strategy = Column(String(20), nullable=False, default="keyword")  # keyword/keyword_or_scanned/none
+    scan_subdirectories = Column(Boolean, nullable=True, default=True)
+    scan_debounce_time = Column(Integer, nullable=True, default=30)  # 扫描任务监控防抖时间（秒）
+    
     # 监控配置
     monitoring_enabled = Column(Boolean, nullable=True, default=True)  # 是否启用监控
-    monitoring_debounce = Column(Integer, nullable=True, default=5)  # 防抖延迟（秒）
+    monitoring_mode = Column(String(20), nullable=True, default="watchdog")  # watchdog/polling
+    monitoring_debounce = Column(Integer, nullable=True, default=5)  # 监控防抖延迟（秒）
+    
+    # 自动化配置
+    auto_recognize = Column(Boolean, nullable=True, default=False)  # 扫描完成后是否自动识别
+    auto_organize = Column(Boolean, nullable=True, default=False)  # 扫描完成后是否自动整理
 
     # 忽略配置
     ignore_patterns = Column(JSON, nullable=True)  # 忽略文件模式列表
@@ -279,6 +294,62 @@ class ConfigHistory(Base):
     change_reason = Column(String(255), nullable=True)
     created_at = Column(DateTime, nullable=True, default=datetime.now, index=True)
     rolled_back = Column(Boolean, nullable=True, default=False)
+
+
+class FileTask(Base):
+    """文件任务表 - 每个被扫描文件的任务"""
+    __tablename__ = "file_tasks"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    batch_id = Column(String(36), nullable=True, index=True)  # 批次ID，每个文件一个批次
+    media_file_id = Column(Integer, ForeignKey("media_files.id"), nullable=False, index=True)
+    target_path = Column(String(500), nullable=False)  # 文件所在路径
+    file_name = Column(String(255), nullable=False)  # 文件名
+
+    # 任务状态
+    status = Column(String(20), nullable=False, default="pending", index=True)  # pending/scanning/scanned/recognizing/recognized/organizing/organized/completed/failed/stopped
+    scan_progress = Column(Float, nullable=True, default=0)  # 扫描进度（0-100）
+    
+    # 扫描阶段
+    scan_started_at = Column(DateTime, nullable=True)
+    scan_completed_at = Column(DateTime, nullable=True)
+    scan_error = Column(Text, nullable=True)
+    
+    # 媒体信息
+    video_tracks = Column(Integer, nullable=True, default=0)
+    audio_tracks = Column(Integer, nullable=True, default=0)
+    subtitle_tracks = Column(Integer, nullable=True, default=0)
+    video_codec = Column(String(50), nullable=True)
+    audio_codec = Column(String(50), nullable=True)
+    
+    # 字幕信息
+    has_external_subtitle = Column(Boolean, nullable=True, default=False)
+    external_subtitle_name = Column(String(255), nullable=True)
+    
+    # 扫描结果
+    scan_result = Column(String(20), nullable=True)  # success/failed/skipped
+
+    # 识别阶段
+    recognition_started_at = Column(DateTime, nullable=True)
+    recognition_completed_at = Column(DateTime, nullable=True)
+    recognition_error = Column(Text, nullable=True)
+
+    # 整理阶段
+    organize_started_at = Column(DateTime, nullable=True)
+    organize_completed_at = Column(DateTime, nullable=True)
+    organize_error = Column(Text, nullable=True)
+
+    # 整理结果
+    organize_action = Column(String(20), nullable=True)  # move/rename/copy/skip
+    source_path = Column(String(500), nullable=True)
+    target_path_final = Column(String(500), nullable=True)
+
+    # 时间戳
+    created_at = Column(DateTime, nullable=True, default=datetime.now, index=True)
+    updated_at = Column(DateTime, nullable=True, default=datetime.now, onupdate=datetime.now)
+
+    # 关系
+    media_file = relationship("MediaFile", backref="file_tasks")
 
 
 class OperationLog(Base):

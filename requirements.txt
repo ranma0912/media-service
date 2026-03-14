@@ -20,6 +20,9 @@ jsonschema>=4.20.0
 # 媒体处理
 pymediainfo>=6.0
 
+# 编码检测
+chardet>=5.0
+
 # 任务调度
 apscheduler>=3.10.0
 

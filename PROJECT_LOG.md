@@ -2,7 +2,126 @@
 
 ## 2026-03-14（更新）
 
-### 扫描功能测试与修复 🔧
+### 文件扫描模块需求重构 🔧
+- ✅ 需求文档编写
+  - ✅ 创建 docs/文件扫描模块需求文档_v3.0.md
+  - ✅ 创建 docs/文件扫描模块需求文档_v3.1.md
+  - ✅ 详细定义默认扫描策略功能
+    - ✅ 默认扫描类型：全量扫描、增量扫描
+    - ✅ 默认递归方式：递归扫描、非递归扫描
+    - ✅ 默认跳过策略：1.仅跳过关键词、2.跳过关键词或已扫描、3.不跳过
+    - ✅ 默认扫描策略支持用户选择是否扫描子目录
+    - ✅ 默认扫描策略监控防抖时间：30-300秒，默认30秒
+  - ✅ 详细定义多路径独立扫描策略功能
+    - ✅ 支持用户建立不同的扫描路径
+    - ✅ 支持用户对每个扫描路径建立单独的扫描文件策略
+    - ✅ 扫描策略包含扫描类型、递归方式、跳过策略、是否扫描子目录等参数
+  - ✅ 详细定义手动扫描触发功能
+    - ✅ 支持用户对路径列表中选中的路径进行手动扫描
+    - ✅ 支持用户通过手动输入或浏览的方式选择其他路径进行扫描
+    - ✅ 支持用户选择使用默认扫描策略或临时调整扫描策略
+  - ✅ 详细定义文件列表展示和操作功能
+    - ✅ 文件列表显示文件名、所在路径、扫描开始时间、扫描状态、扫描进度、扫描结束时间
+    - ✅ 支持用户对文件列表中选中的文件进行查看扫描结果、重新扫描、停止扫描、删除扫描结果等操作
+    - ✅ 查看扫描结果操作弹出小窗显示媒体文件的扫描信息
+    - ✅ 支持用户对文件列表有批量选中、批量重新扫描、批量停止扫描、批量删除扫描结果等操作
+  - ✅ 详细定义文件类型限制和编码格式要求
+    - ✅ 文件类型通过文件扩展名和文件编码格式双重判定
+    - ✅ 支持20种视频文件扩展名
+    - ✅ 支持主流编码格式：mpeg-1,mpeg-2,mpeg-4,x264,x265,av1,vc9等
+- ✅ 流程图更新
+  - ✅ 创建 docs/扫描流程图_v3.0.md
+  - ✅ 创建 docs/扫描流程图_v3.1.md
+  - ✅ 详细描述手动扫描流程
+  - ✅ 详细描述批量操作流程
+
+### 扫描任务列表功能调整 🔧
+- ✅ 删除后端扫描任务列表相关API接口
+  - ✅ 删除 GET /scan-tasks 接口
+  - ✅ 删除 POST /scan-tasks/{task_id}/rescan 接口
+  - ✅ 删除 POST /scan-tasks/{task_id}/stop 接口
+  - ✅ 删除 DELETE /scan-tasks/{task_id} 接口
+- ✅ 删除前端扫描任务列表相关代码
+  - ✅ 删除 ScanManagement.vue 中的扫描任务列表标签页
+  - ✅ 删除 loadScanTasks 函数
+  - ✅ 删除 stopScanTask 函数
+  - ✅ 删除 rescanTask 函数
+  - ✅ 删除 deleteScanTask 函数
+  - ✅ 删除 batchStopScanTasks 函数
+  - ✅ 删除 batchRescanTasks 函数
+  - ✅ 删除 batchDeleteTasks 函数
+- ✅ 优化文件任务列表刷新逻辑
+  - ✅ 修改定时刷新为30秒
+  - ✅ 添加防抖时间30秒
+  - ✅ 使用单个定时器管理刷新
+  - ✅ 添加防护措施避免刷新失控
+- ✅ 修改标签页名称为"文件任务列表"
+- ✅ 修复初次载入不刷新问题
+- ✅ 修复自动刷新失控问题
+
+### 批量操作功能重构 🔧
+- ✅ 重新设计批量操作基于media_file_id
+  - ✅ 删除旧的批量操作接口（基于task_id）
+  - ✅ 创建新的批量操作接口（基于media_file_id）
+  - ✅ 实现单个文件操作接口（基于media_file_id）
+    - ✅ POST /files/{media_file_id}/rescan - 重新扫描单个媒体文件
+    - ✅ POST /files/{media_file_id}/stop - 停止扫描单个媒体文件
+    - ✅ DELETE /files/{media_file_id} - 删除单个媒体文件扫描结果
+  - ✅ 实现批量文件操作接口（基于media_file_id）
+    - ✅ POST /files/batch/rescan - 批量重新扫描媒体文件
+    - ✅ POST /files/batch/stop - 批量停止扫描媒体文件
+    - ✅ DELETE /files/batch - 批量删除媒体文件扫描结果
+  - ✅ 每个批量操作接口对每个文件逐一执行操作
+  - ✅ 返回详细的成功/失败统计信息
+- ✅ 更新前端API调用函数
+  - ✅ 创建 rescanMediaFile 函数
+  - ✅ 创建 stopMediaFileScan 函数
+  - ✅ 创建 deleteMediaFileScanResult 函数
+  - ✅ 创建 batchRescanMediaFiles 函数
+  - ✅ 创建 batchStopMediaFileScans 函数
+  - ✅ 创建 batchDeleteMediaFileScanResults 函数
+- ✅ 更新Vue组件使用新接口
+  - ✅ 修改批量重新扫描函数使用新的API
+  - ✅ 修改批量停止函数使用新的API
+  - ✅ 修改批量删除函数使用新的API
+  - ✅ 从 selectedFileTasks 提取 media_file_id 列表
+  - ✅ 添加ID验证和过滤逻辑
+  - ✅ 添加详细的控制台日志
+- ✅ 改进错误处理
+  - ✅ 支持detail数组的错误信息显示
+  - ✅ 改进批量操作的错误提示
+
+### 批量操作接口类型转换问题 🔧
+- ✅ 尝试方案1：使用Pydantic v2的field_validator
+  - ✅ 创建 BatchFileOperationRequest 模型
+  - ✅ 添加 @field_validator 装饰器
+  - ✅ 实现类型转换逻辑
+  - ❌ 结果：仍然返回422错误
+- ✅ 尝试方案2：使用BeforeValidator和Annotated
+  - ✅ 创建 to_int_list 验证函数
+  - ✅ 定义 IntList = Annotated[List[int], BeforeValidator(to_int_list)]
+  - ✅ 使用 IntList 作为字段类型
+  - ❌ 结果：仍然返回422错误
+- ✅ 尝试方案3：使用Union[int, str] + 手动转换方法
+  - ✅ 使用 List[Union[int, str]] 作为字段类型
+  - ✅ 创建 get_int_ids() 方法进行手动转换
+  - ✅ 修改所有批量操作接口使用 get_int_ids()
+  - ✅ 添加 ConfigDict(str_strip_whitespace=True) 配置
+  - ❌ 结果：仍然返回422错误"Input should be a valid integer, unable to parse string as an integer"
+- 🔧 待解决问题
+  - 🔧 批量操作接口仍然返回类型转换错误
+  - 🔧 需要深入排查参数从前端到后端的传递过程
+  - 🔧 可能的原因：
+    - Pydantic验证器在不同版本或环境下的行为差异
+    - FastAPI的请求解析逻辑问题
+    - 前端发送的数据格式问题
+  - 🔧 下一步行动：
+    - 检查前端实际发送的请求体格式
+    - 检查请求头信息
+    - 尝试使用不同的验证器方式
+    - 考虑使用FastAPI的Body参数类型转换
+
+### 扫描功能测试与修复 ✅
 - ✅ 数据库初始化
   - ✅ 重置数据库，清除所有历史数据
   - ✅ 创建所有数据库表
@@ -19,8 +138,8 @@
   - ✅ 当任务没有扫描到文件时，重新执行完整扫描
   - ✅ 修复 RescanOptions.skip_mode 属性错误
   - ✅ 根据 skip_keywords 和 skip_scanned 正确设置跳过模式
-  - 🔧 扫描完成后点击重新扫描仍有异常
-  - 🔧 需要进一步调试重新扫描功能
+  - ⏳ 待解决问题：扫描完成后点击重新扫描仍有异常
+  - ⏳ 需要进一步调试重新扫描功能
 
 ## 2026-03-13（更新）
 

@@ -15,100 +15,92 @@
       </div>
     </el-card>
 
-    <!-- 扫描任务列表 -->
-    <el-card class="task-card">
-      <template #header>
-        <div class="card-header">
-          <span class="title">扫描任务</span>
-          <div class="header-actions">
-            <el-button 
-              type="danger" 
-              :disabled="selectedTasks.length === 0"
-              @click="handleBatchStop"
-            >
-              批量停止 ({{ selectedTasks.length }})
-            </el-button>
-            <el-button 
-              type="danger" 
-              :disabled="selectedTasks.length === 0"
-              @click="handleBatchDelete"
-            >
-              批量删除 ({{ selectedTasks.length }})
-            </el-button>
-            <el-button :icon="Refresh" @click="loadTasks">刷新</el-button>
-          </div>
-        </div>
-      </template>
+    <!-- 标签页切换 -->
+    <el-tabs v-model="activeTab" class="scan-tabs">
+      <!-- 已扫描文件标签页 -->
+      <el-tab-pane label="已扫描文件" name="fileTasks">
+        <el-card class="file-task-card">
+          <template #header>
+            <div class="card-header">
+              <span class="title">已扫描文件</span>
+              <div class="header-actions">
+                <el-select v-model="fileTaskStatusFilter" placeholder="状态筛选" style="width: 120px; margin-right: 12px;">
+                  <el-option label="全部" value="" />
+                  <el-option label="扫描中" value="scanning" />
+                  <el-option label="已完成" value="scanned" />
+                  <el-option label="失败" value="failed" />
+                </el-select>
+                <el-button 
+                  type="primary" 
+                  :disabled="selectedFileTasks.length === 0"
+                  @click="handleBatchRescanFiles"
+                >
+                  批量重新扫描 ({{ selectedFileTasks.length }})
+                </el-button>
+                <el-button 
+                  type="warning" 
+                  :disabled="selectedFileTasks.length === 0"
+                  @click="handleBatchStopFileScans"
+                >
+                  批量停止 ({{ selectedFileTasks.length }})
+                </el-button>
+                <el-button 
+                  type="danger" 
+                  :disabled="selectedFileTasks.length === 0"
+                  @click="handleBatchDeleteFileScanResults"
+                >
+                  批量删除 ({{ selectedFileTasks.length }})
+                </el-button>
+                <el-button :icon="Refresh" @click="loadFileTasks">刷新</el-button>
+              </div>
+            </div>
+          </template>
 
-      <el-table
-        v-loading="loading"
-        :data="taskList"
-        stripe
-        style="width: 100%"
-        @selection-change="handleSelectionChange"
-      >
-        <el-table-column type="selection" width="55" />
-        <el-table-column prop="id" label="任务ID" width="100" />
-        <el-table-column prop="targetPath" label="扫描路径" min-width="200" show-overflow-tooltip />
-        <el-table-column prop="scanType" label="扫描类型" width="100">
-          <template #default="{ row }">
-            <el-tag v-if="row.scanType === 'full'" type="primary">全量</el-tag>
-            <el-tag v-else-if="row.scanType === 'incremental'" type="success">增量</el-tag>
-            <el-tag v-else-if="row.scanType === 'rescan'" type="warning">重新扫描</el-tag>
-            <el-tag v-else type="info">{{ row.scanType }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="status" label="状态" width="100">
-          <template #default="{ row }">
-            <el-tag v-if="row.status === 'running'" type="warning">扫描中</el-tag>
-            <el-tag v-else-if="row.status === 'completed'" type="success">已完成</el-tag>
-            <el-tag v-else-if="row.status === 'failed'" type="danger">失败</el-tag>
-            <el-tag v-else type="info">等待中</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="totalFiles" label="文件总数" width="100">
-          <template #default="{ row }">
-            {{ row.totalFiles || row.total_files || 0 }}
-          </template>
-        </el-table-column>
-        <el-table-column prop="newFiles" label="新增文件" width="100">
-          <template #default="{ row }">
-            {{ row.newFiles || row.new_files || 0 }}
-          </template>
-        </el-table-column>
-        <el-table-column label="进度" width="150">
-          <template #default="{ row }">
-            <el-progress
-              v-if="row.status === 'running'"
-              :percentage="row.progress || 0"
-              :status="row.progress >= 100 ? 'success' : ''"
-            />
-            <span v-else-if="row.status === 'completed'">已完成</span>
-            <span v-else>-</span>
-          </template>
-        </el-table-column>
-        <el-table-column prop="duration" label="耗时" width="100">
-          <template #default="{ row }">
-            {{ formatDuration(row.duration) }}
-          </template>
-        </el-table-column>
-        <el-table-column prop="createdAt" label="开始时间" width="160" />
-        <el-table-column label="当前文件" min-width="200" show-overflow-tooltip>
-          <template #default="{ row }">
-            {{ row.currentFile || row.current_file || '-' }}
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="200" fixed="right">
-          <template #default="{ row }">
-            <el-button link type="primary" @click="handleView(row)">查看</el-button>
-            <el-button v-if="row.status === 'running'" link type="danger" @click="handleStop(row)">停止</el-button>
-            <el-button v-else-if="row.status === 'failed'" link type="primary" @click="handleRetry(row)">重试</el-button>
-            <el-button v-if="row.status === 'completed'" link type="success" @click="handleRescan(row)">重新扫描</el-button>
-            <el-button v-if="row.status !== 'running'" link type="danger" @click="handleDelete(row)">删除</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-    </el-card>
+          <el-table
+            v-loading="loading"
+            :data="fileTaskList"
+            stripe
+            style="width: 100%"
+            @selection-change="handleFileTaskSelectionChange"
+          >
+            <el-table-column type="selection" width="55" />
+            <el-table-column prop="id" label="任务ID" width="80" />
+            <el-table-column prop="file_name" label="文件名" min-width="150" show-overflow-tooltip />
+            <el-table-column prop="target_path" label="路径" min-width="150" show-overflow-tooltip />
+            <el-table-column prop="status" label="状态" width="100">
+              <template #default="{ row }">
+                <el-tag v-if="row.status === 'pending'" type="info">等待中</el-tag>
+                <el-tag v-else-if="row.status === 'scanning'" type="warning">扫描中</el-tag>
+                <el-tag v-else-if="row.status === 'scanned'" type="success">已完成</el-tag>
+                <el-tag v-else-if="row.status === 'failed'" type="danger">失败</el-tag>
+                <el-tag v-else type="info">{{ row.status }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="进度" width="120">
+              <template #default="{ row }">
+                <el-progress
+                  v-if="row.status === 'scanning'"
+                  :percentage="row.scan_progress || 0"
+                  :status="(row.scan_progress || 0) >= 100 ? 'success' : ''"
+                />
+                <span v-else-if="row.status === 'scanned'">已完成</span>
+                <span v-else>-</span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="scan_started_at" label="开始时间" width="160" />
+            <el-table-column prop="scan_completed_at" label="完成时间" width="160" />
+            <el-table-column label="操作" width="200" fixed="right">
+              <template #default="{ row }">
+                <el-button link type="primary" @click="handleViewFileTask(row)">查看结果</el-button>
+                <el-button v-if="row.status === 'scanned'" link type="success" @click="handleRescanFile(row)">重新扫描</el-button>
+                <el-button v-if="row.status === 'scanning'" link type="danger" @click="handleStopFileScan(row)">停止</el-button>
+                <el-button v-if="row.status === 'scanned'" link type="danger" @click="handleDeleteFileScanResult(row)">删除</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </el-card>
+      </el-tab-pane>
+    </el-tabs>
 
     <!-- 扫描路径配置 -->
     <el-card class="path-card">
@@ -134,6 +126,13 @@
             <el-tag :type="row.recursive ? 'success' : 'info'">
               {{ row.recursive ? '是' : '否' }}
             </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="skip_strategy" label="跳过策略" width="120">
+          <template #default="{ row }">
+            <el-tag v-if="row.skip_strategy === 'keyword'" type="warning">关键词</el-tag>
+            <el-tag v-else-if="row.skip_strategy === 'record'" type="danger">关键词+记录</el-tag>
+            <el-tag v-else type="info">不跳过</el-tag>
           </template>
         </el-table-column>
         <el-table-column prop="monitoring_enabled" label="监控" width="80">
@@ -162,10 +161,10 @@
 
     <!-- 扫描路径配置对话框 -->
     <el-dialog v-model="pathDialogVisible" title="扫描路径配置" width="700px">
-      <el-form :model="pathForm" label-width="120px">
+      <el-form :model="pathForm" label-width="150px">
         <el-form-item label="路径名称" required>
           <el-input 
-            v-model="pathForm.pathName" 
+            v-model="pathForm.path_name" 
             placeholder="输入路径名称（1-100字符）"
             maxlength="100"
             show-word-limit
@@ -183,96 +182,47 @@
             </template>
           </el-input>
         </el-form-item>
-        <el-form-item>
-          <template #label>
-            <span>扫描类型</span>
-            <el-tooltip content="全量扫描：扫描所有文件；增量扫描：只扫描新增或修改的文件" placement="top">
-              <el-icon class="ml-2"><QuestionFilled /></el-icon>
-            </el-tooltip>
-          </template>
-          <el-radio-group v-model="pathForm.scanType">
+        <el-form-item label="扫描类型" required>
+          <el-radio-group v-model="pathForm.scan_type">
             <el-radio label="full">全量</el-radio>
             <el-radio label="incremental">增量</el-radio>
           </el-radio-group>
         </el-form-item>
-        <el-form-item>
-          <template #label>
-            <span>递归扫描</span>
-            <el-tooltip content="是否递归扫描子目录" placement="top">
-              <el-icon class="ml-2"><QuestionFilled /></el-icon>
-            </el-tooltip>
-          </template>
+        <el-form-item label="递归扫描">
           <el-switch v-model="pathForm.recursive" />
         </el-form-item>
-        <el-form-item>
-          <template #label>
-            <span>启用监控</span>
-            <el-tooltip content="是否启用文件系统实时监控" placement="top">
-              <el-icon class="ml-2"><QuestionFilled /></el-icon>
-            </el-tooltip>
-          </template>
-          <el-switch v-model="pathForm.monitoringEnabled" />
+        <el-form-item label="文件跳过策略">
+          <el-radio-group v-model="pathForm.skip_strategy">
+            <el-radio label="keyword">仅跳过关键词库文件</el-radio>
+            <el-radio label="record">跳过关键词库和已扫描文件</el-radio>
+            <el-radio label="none">不跳过任何文件</el-radio>
+          </el-radio-group>
         </el-form-item>
-        <el-form-item>
-          <template #label>
-            <span>监控防抖(秒)</span>
-            <el-tooltip content="文件变化后等待多少秒再触发扫描" placement="top">
-              <el-icon class="ml-2"><QuestionFilled /></el-icon>
-            </el-tooltip>
-          </template>
-          <el-input-number v-model="pathForm.monitoringDebounce" :min="1" :max="60" />
+        <el-form-item label="是否扫描子目录">
+          <el-switch v-model="pathForm.scan_subdirectories" />
         </el-form-item>
-        <el-form-item>
-          <template #label>
-            <span>忽略模式</span>
-            <el-tooltip content="选择预设的忽略模式或自定义忽略规则" placement="top">
-              <el-icon class="ml-2"><QuestionFilled /></el-icon>
-            </el-tooltip>
-          </template>
-          <el-select v-model="pathForm.ignoreMode" placeholder="选择忽略模式" style="width: 100%">
-            <el-option label="不忽略任何文件" value="none" />
-            <el-option label="忽略临时文件" value="temp" />
-            <el-option label="忽略系统文件" value="system" />
-            <el-option label="忽略临时和系统文件" value="both" />
-            <el-option label="自定义" value="custom" />
+        <el-form-item label="监控防抖时间(秒)">
+          <el-input-number v-model="pathForm.scan_debounce_time" :min="30" :max="300" />
+        </el-form-item>
+        <el-form-item label="启用文件监控">
+          <el-switch v-model="pathForm.monitoring_enabled" />
+        </el-form-item>
+        <el-form-item label="监控模式">
+          <el-select v-model="pathForm.monitoring_mode" placeholder="选择监控模式" style="width: 100%">
+            <el-option label="Watchdog" value="watchdog" />
+            <el-option label="Polling" value="polling" />
           </el-select>
         </el-form-item>
-        <el-form-item v-if="pathForm.ignoreMode === 'custom'">
-          <template #label>
-            <span>自定义忽略规则</span>
-            <el-tooltip content="每行一个文件名模式，匹配的文件将被忽略" placement="top">
-              <el-icon class="ml-2"><QuestionFilled /></el-icon>
-            </el-tooltip>
-          </template>
-          <el-input 
-            v-model="pathForm.ignorePatterns" 
-            type="textarea" 
-            :rows="3" 
-            placeholder="例如：*.tmp&#10;*.part&#10;thumbs.db"
-          />
+        <el-form-item label="监控防抖(秒)">
+          <el-input-number v-model="pathForm.monitoring_debounce" :min="1" :max="60" />
         </el-form-item>
-        <el-form-item>
-          <template #label>
-            <span>自动扫描间隔</span>
-            <el-tooltip content="自动扫描的时间间隔（分钟），0表示不自动扫描" placement="top">
-              <el-icon class="ml-2"><QuestionFilled /></el-icon>
-            </el-tooltip>
-          </template>
-          <el-input-number 
-            v-model="pathForm.scanInterval" 
-            :min="0" 
-            :max="1440"
-            :step="5"
-          />
-          <span style="margin-left: 8px; color: #999;">分钟（0表示不自动扫描）</span>
+        <el-form-item label="自动识别">
+          <el-switch v-model="pathForm.auto_recognize" />
         </el-form-item>
-        <el-form-item>
-          <template #label>
-            <span>启用路径</span>
-            <el-tooltip content="是否启用该扫描路径" placement="top">
-              <el-icon class="ml-2"><QuestionFilled /></el-icon>
-            </el-tooltip>
-          </template>
+        <el-form-item label="自动整理">
+          <el-switch v-model="pathForm.auto_organize" />
+        </el-form-item>
+        <el-form-item label="启用路径">
           <el-switch v-model="pathForm.enabled" />
         </el-form-item>
       </el-form>
@@ -286,76 +236,55 @@
     <el-dialog v-model="scanDialogVisible" title="执行扫描" width="700px">
       <el-form :model="scanForm" label-width="120px">
         <el-form-item label="扫描方式">
-          <el-radio-group v-model="scanForm.scanType">
+          <el-radio-group v-model="scanForm.scan_type">
             <el-radio label="path">使用已配置路径</el-radio>
             <el-radio label="custom">自定义路径</el-radio>
           </el-radio-group>
         </el-form-item>
 
-        <el-form-item v-if="scanForm.scanType === 'path'" label="选择路径">
-          <el-select v-model="scanForm.selectedPathId" placeholder="请选择扫描路径">
+        <el-form-item v-if="scanForm.scan_type === 'path'" label="选择路径">
+          <el-select v-model="scanForm.selected_path_id" placeholder="请选择扫描路径" style="width: 100%">
             <el-option
               v-for="path in pathList.filter(p => p.enabled)"
               :key="path.id"
               :label="`${path.path_name || path.path} (${path.scan_type === 'full' ? '全量' : '增量'})`"
               :value="path.id"
-            >
-              <template #default>
-                <div>
-                  <div>{{ path.path_name || path.path }}</div>
-                  <div style="font-size: 12px; color: #999;">
-                    <el-tag size="small" :type="path.scan_type === 'full' ? 'primary' : 'success'">
-                      {{ path.scan_type === 'full' ? '全量' : '增量' }}
-                    </el-tag>
-                    <el-tag size="small" :type="path.monitoring_enabled ? 'success' : 'info'">
-                      {{ path.monitoring_enabled ? '监控' : '不监控' }}
-                    </el-tag>
-                  </div>
-                </div>
-              </template>
-            </el-option>
+            />
           </el-select>
         </el-form-item>
 
-        <el-form-item v-if="scanForm.scanType === 'custom'" label="扫描路径">
-          <el-input v-model="scanForm.customPath" placeholder="输入或选择路径">
+        <el-form-item v-if="scanForm.scan_type === 'custom'" label="扫描路径">
+          <el-input v-model="scanForm.path" placeholder="输入或选择路径">
             <template #append>
               <el-button :icon="Folder" @click="handleBrowseCustomPath">浏览</el-button>
             </template>
           </el-input>
         </el-form-item>
 
-        <el-form-item v-if="scanForm.scanType === 'custom'" label="扫描类型">
-          <el-radio-group v-model="scanForm.customScanType">
-            <el-radio label="full">全量</el-radio>
-            <el-radio label="incremental">增量</el-radio>
-          </el-radio-group>
+        <el-form-item v-if="scanForm.scan_type === 'custom'" label="使用默认策略">
+          <el-switch v-model="scanForm.use_default_strategy" />
         </el-form-item>
 
-        <el-form-item v-if="scanForm.scanType === 'custom'" label="递归扫描">
-          <el-switch v-model="scanForm.customRecursive" />
-        </el-form-item>
+        <template v-if="scanForm.scan_type === 'custom' && !scanForm.use_default_strategy">
+          <el-form-item label="扫描类型">
+            <el-radio-group v-model="scanForm.scan_type_value">
+              <el-radio label="full">全量</el-radio>
+              <el-radio label="incremental">增量</el-radio>
+            </el-radio-group>
+          </el-form-item>
 
-        <el-form-item v-if="scanForm.scanType === 'custom'" label="文件跳过方式">
-          <el-radio-group v-model="scanForm.skipMode">
-            <el-radio label="keyword">仅跳过关键词库文件</el-radio>
-            <el-radio label="record">跳过关键词库和已扫描文件</el-radio>
-            <el-radio label="none">不跳过任何文件</el-radio>
-          </el-radio-group>
-        </el-form-item>
+          <el-form-item label="递归扫描">
+            <el-switch v-model="scanForm.recursive" />
+          </el-form-item>
 
-        <el-form-item v-if="scanForm.scanType === 'custom' && scanForm.skipMode !== 'none'" label="跳过说明">
-          <div style="font-size: 12px; color: #666; line-height: 1.6;">
-            <div v-if="scanForm.skipMode === 'keyword'">
-              <el-icon><QuestionFilled /></el-icon>
-              仅跳过关键词库文件（如：keywords.txt、rules_xxx.txt等）
-            </div>
-            <div v-if="scanForm.skipMode === 'record'">
-              <el-icon><QuestionFilled /></el-icon>
-              跳过关键词库文件和数据库中已存在的文件（基于文件路径判断）
-            </div>
-          </div>
-        </el-form-item>
+          <el-form-item label="文件跳过策略">
+            <el-radio-group v-model="scanForm.skip_strategy">
+              <el-radio label="keyword">仅跳过关键词库文件</el-radio>
+              <el-radio label="record">跳过关键词库和已扫描文件</el-radio>
+              <el-radio label="none">不跳过任何文件</el-radio>
+            </el-radio-group>
+          </el-form-item>
+        </template>
       </el-form>
       <template #footer>
         <el-button @click="scanDialogVisible = false">取消</el-button>
@@ -363,10 +292,88 @@
       </template>
     </el-dialog>
 
+    <!-- 扫描配置对话框 -->
+    <el-dialog v-model="configDialogVisible" title="默认扫描策略配置" width="700px">
+      <el-form :model="configForm" label-width="200px">
+        <el-form-item label="默认扫描类型">
+          <el-radio-group v-model="configForm.default_scan_type">
+            <el-radio label="full">全量扫描</el-radio>
+            <el-radio label="incremental">增量扫描</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        
+        <el-form-item label="默认递归扫描">
+          <el-switch v-model="configForm.default_recursive" />
+        </el-form-item>
+        
+        <el-form-item label="默认文件跳过策略">
+          <el-radio-group v-model="configForm.default_skip_strategy">
+            <el-radio label="keyword">仅跳过关键词库文件</el-radio>
+            <el-radio label="record">跳过关键词库和已扫描文件</el-radio>
+            <el-radio label="none">不跳过任何文件</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        
+        <el-form-item label="默认扫描子目录">
+          <el-switch v-model="configForm.scan_subdirectories" />
+        </el-form-item>
+        
+        <el-form-item label="默认监控防抖时间(秒)">
+          <el-input-number 
+            v-model="configForm.default_monitor_debounce_time" 
+            :min="30" 
+            :max="300"
+            style="width: 200px;"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="configDialogVisible = false">取消</el-button>
+        <el-button @click="resetConfig">恢复默认</el-button>
+        <el-button type="primary" @click="saveConfig">保存配置</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 文件扫描结果详情对话框 -->
+    <el-dialog v-model="scanResultDialogVisible" title="文件扫描结果详情" width="800px">
+      <div v-if="scanResultDetail" class="scan-result-detail">
+        <el-descriptions :column="2" border>
+          <el-descriptions-item label="文件名">{{ scanResultDetail.file_name }}</el-descriptions-item>
+          <el-descriptions-item label="文件大小">{{ formatFileSize(scanResultDetail.file_size) }}</el-descriptions-item>
+          <el-descriptions-item label="文件类型">{{ scanResultDetail.file_type }}</el-descriptions-item>
+          <el-descriptions-item label="文件路径">{{ scanResultDetail.file_path }}</el-descriptions-item>
+          <el-descriptions-item label="扫描开始时间">{{ scanResultDetail.scan_started_at || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="扫描完成时间">{{ scanResultDetail.scan_completed_at || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="文件编码格式">{{ scanResultDetail.file_encoding_format || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="文件哈希值">
+            <el-text truncated :title="scanResultDetail.file_hash">{{ scanResultDetail.file_hash || '-' }}</el-text>
+          </el-descriptions-item>
+          <el-descriptions-item label="视频轨道数">{{ scanResultDetail.video_tracks }}</el-descriptions-item>
+          <el-descriptions-item label="音频轨道数">{{ scanResultDetail.audio_tracks }}</el-descriptions-item>
+          <el-descriptions-item label="字幕轨道数">{{ scanResultDetail.subtitle_tracks }}</el-descriptions-item>
+          <el-descriptions-item label="扫描任务ID">{{ scanResultDetail.scan_task_id }}</el-descriptions-item>
+          <el-descriptions-item label="视频编码">{{ scanResultDetail.video_codec || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="音频编码">{{ scanResultDetail.audio_codec || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="外挂字幕" :span="2">
+            <div v-if="scanResultDetail.has_external_subtitle">
+              <el-tag type="success">有外挂字幕</el-tag>
+              <el-text style="margin-left: 8px;">{{ scanResultDetail.external_subtitle_name || '-' }}</el-text>
+            </div>
+            <el-tag v-else type="info">无外挂字幕</el-tag>
+          </el-descriptions-item>
+          <el-descriptions-item label="扫描结果" :span="2">
+            <el-text>{{ scanResultDetail.scan_result || '-' }}</el-text>
+          </el-descriptions-item>
+        </el-descriptions>
+      </div>
+      <template #footer>
+        <el-button @click="scanResultDialogVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
+
     <!-- 目录浏览对话框 -->
     <el-dialog v-model="browseDialogVisible" title="选择目录" width="800px">
       <div class="directory-browser">
-        <!-- 路径导航栏 -->
         <div class="path-navigation">
           <el-button 
             v-for="(segment, index) in pathSegments" 
@@ -378,7 +385,6 @@
           </el-button>
         </div>
 
-        <!-- 目录内容列表 -->
         <el-table
           :data="directoryItems"
           height="400"
@@ -413,7 +419,6 @@
           </el-table-column>
         </el-table>
 
-        <!-- 操作按钮 -->
         <div class="browser-actions">
           <el-button @click="goUp">上级目录</el-button>
           <el-button @click="refreshDirectory">刷新</el-button>
@@ -427,211 +432,162 @@
 <script setup>
 import { ref, reactive, onUnmounted, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { VideoCamera, FolderOpened, Setting, Refresh, Plus, Folder } from '@element-plus/icons-vue'
-import WebSocketClient from '@/utils/websocket'
+import { VideoCamera, FolderOpened, Setting, Refresh, Plus, Folder, QuestionFilled } from '@element-plus/icons-vue'
+import {
+  createScanTask,
+  getScanPaths,
+  addScanPath,
+  updateScanPath,
+  deleteScanPath,
+  browseDirectory,
+  getDefaultScanConfig,
+  updateDefaultScanConfig,
+  resetDefaultScanConfig,
+  getFileTasks,
+  getScanResult,
+  batchRescanMediaFiles,
+  batchStopMediaFileScans,
+  batchDeleteMediaFileScanResults
+} from '@/api/scan'
 
 // 加载状态
 const loading = ref(false)
 
-// 扫描任务列表
-const taskList = ref([])
+// 活动标签页
+const activeTab = ref('fileTasks')
 
-// WebSocket连接
-const wsConnections = new Map() // task_id -> WebSocketClient
+// 文件任务列表
+const fileTaskList = ref([])
 
-const scanProgress = new Map() // task_id -> progress data
+// 文件任务状态筛选
+const fileTaskStatusFilter = ref('')
+
+// 选中的文件任务
+const selectedFileTasks = ref([])
 
 // 扫描路径列表
 const pathList = ref([])
 
-// 选中的任务
-const selectedTasks = ref([])
+// 扫描结果详情
+const scanResultDetail = ref(null)
+const scanResultDialogVisible = ref(false)
 
-// 加载路径列表
-const loadPaths = async () => {
-  try {
-    const { getScanPaths } = await import('@/api/scan')
-    const paths = await getScanPaths()
-    pathList.value = paths.map(p => ({
-      id: p.id,
-      path: p.path,
-      recursive: p.recursive,
-      enabled: p.enabled,
-      lastScanAt: p.last_scan_at
-    }))
-  } catch (error) {
-    console.error('加载扫描路径失败:', error)
-  }
-}
+// 扫描配置对话框
+const configDialogVisible = ref(false)
+const configForm = reactive({
+  default_scan_type: 'incremental',
+  default_recursive: true,
+  default_skip_strategy: 'keyword',
+  scan_subdirectories: true,
+  default_monitor_debounce_time: 30
+})
 
 // 路径对话框
 const pathDialogVisible = ref(false)
 const editingPathId = ref(null)
 const pathForm = reactive({
-  pathName: '',
+  path_name: '',
   path: '',
-  scanType: 'incremental',
+  scan_type: 'incremental',
   recursive: true,
-  monitoringEnabled: true,
-  monitoringDebounce:5,
-  scanInterval: 0, // 自动扫描间隔（分钟），0表示不自动扫描
-  ignoreMode: 'none', // none, temp, system, both, custom
-  ignorePatterns: '',
+  skip_strategy: 'keyword',
+  scan_subdirectories: true,
+  scan_debounce_time: 30,
+  monitoring_enabled: false,
+  monitoring_mode: 'watchdog',
+  monitoring_debounce: 5,
+  auto_recognize: false,
+  auto_organize: false,
   enabled: true
 })
 
-// 路径验证函数
-const validatePath = (path) => {
-  if (!path || path.trim() === '') {
-    return '路径不能为空'
-  }
-
-  // 检查路径长度（Windows最大路径长度为260字符）
-  if (path.length > 260) {
-    return '路径长度不能超过260个字符'
-  }
-
-  // 检查非法字符（排除驱动器盘符后的冒号）
-  const illegalChars = /[<>:"|?*]/
-  // 检查路径中是否存在非法字符，但排除驱动器盘符后的冒号（如 F:）
-  const pathWithoutDrive = path.replace(/^[A-Za-z]:/, '')
-  if (illegalChars.test(pathWithoutDrive)) {
-    return '路径包含非法字符：< > : " | ? *'
-  }
-
-  // 检查是否包含保留的设备名称
-  const reservedNames = /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i
-  const parts = path.split(/[\/]/)
-  for (const part of parts) {
-    if (reservedNames.test(part)) {
-      return `路径包含保留的设备名称: ${part}`
-    }
-  }
-
-  return null
-}
-
-// 路径名称验证函数
-const validatePathName = (name) => {
-  if (!name || name.trim() === '') {
-    return '路径名称不能为空'
-  }
-
-  if (name.length > 100) {
-    return '路径名称不能超过100个字符'
-  }
-
-  // 检查非法字符
-  const illegalChars = /[<>:"|?*\/]/i
-  if (illegalChars.test(name)) {
-    return '路径名称包含非法字符：< > : " | ? * / \\'
-  }
-
-  return null
-}
-
-// 格式化时长
-const formatDuration = (seconds) => {
-  if (!seconds) return '-'
-  const h = Math.floor(seconds / 3600)
-  const m = Math.floor((seconds % 3600) / 60)
-  const s = seconds % 60
-  if (h > 0) {
-    return `${h}时${m}分${s}秒`
-  } else if (m > 0) {
-    return `${m}分${s}秒`
-  } else {
-    return `${s}秒`
-  }
-}
-
-// 加载扫描任务
-const loadTasks = async () => {
-  loading.value = true
-  try {
-    // 调用实际API
-    const { getScanHistory } = await import('@/api/scan')
-    const res = await getScanHistory({
-      limit: 20,
-      offset: 0
-    })
-
-    // 转换数据格式以匹配前端需求
-    taskList.value = res.items.map(item => ({
-      id: item.id,
-      targetPath: item.target_path,
-      scanType: item.scan_type,
-      status: item.completed_at ? 'completed' : 'running',
-      totalFiles: item.total_files,
-      newFiles: item.new_files,
-      duration: item.duration_seconds,
-      createdAt: item.started_at,
-      completedAt: item.completed_at,
-      errorMessage: item.error_message
-    }))
-  } catch (error) {
-    console.error('加载扫描任务失败:', error)
-    ElMessage.error('加载扫描任务失败')
-  } finally {
-    loading.value = false
-  }
-}
-
-// 立即扫描
-const handleScan = async () => {
-  try {
-    // 检查是否有配置的扫描路径
-    if (pathList.value.length === 0) {
-      // 没有配置任何扫描路径，自动打开配置窗口
-      ElMessage.info('尚未配置扫描路径，请先添加扫描路径')
-      handleAddPath()
-      return
-    }
-
-    // 检查是否有可用的扫描路径
-    const enabledPaths = pathList.value.filter(p => p.enabled)
-
-    if (enabledPaths.length === 0) {
-      // 有配置的路径但没有启用的，提示用户
-      ElMessage.warning('没有启用的扫描路径，请先启用扫描路径或添加新路径')
-      handleAddPath()
-      return
-    }
-
-    // 显示扫描选择对话框
-    await showScanDialog()
-  } catch (error) {
-    if (error !== 'cancel') {
-      console.error('启动扫描失败:', error)
-      ElMessage.error('启动扫描失败')
-    }
-  }
-}
-
-// 显示扫描选择对话框
+// 扫描选择对话框
 const scanDialogVisible = ref(false)
 const scanForm = reactive({
-  scanType: 'path', // path: 使用已配置路径, custom: 自定义路径
-  selectedPathId: null,
-  customPath: '',
-  customRecursive: true,
-  customScanType: 'incremental',
-  skipMode: 'keyword' // keyword: 仅跳过关键词库, record: 跳过关键词库和已扫描, none: 不跳过任何文件
+  scan_type: 'path', // path: 使用已配置路径, custom: 自定义路径
+  selected_path_id: null,
+  path: '',
+  use_default_strategy: true,
+  scan_type_value: 'incremental',
+  recursive: true,
+  skip_strategy: 'keyword'
 })
 
 // 目录浏览相关
 const browseDialogVisible = ref(false)
 const currentBrowsePath = ref('')
 const directoryItems = ref([])
-const browseTarget = ref('') // 'path' 或 'custom'，标识是为主路径还是自定义路径浏览
+const browseTarget = ref('') // 'path' 或 'custom'
 
-const showScanDialog = async () => {
+// 格式化文件大小
+const formatFileSize = (bytes) => {
+  if (!bytes) return '0 B'
+  const k = 1024
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + ' ' + sizes[i]
+}
+
+// 计算进度
+const calculateProgress = (task) => {
+  if (!task.total_files || task.total_files === 0) return 0
+  const processed = (task.new_files || 0) + (task.updated_files || 0) + (task.skipped_files || 0) + (task.failed_files || 0)
+  return Math.round((processed / task.total_files) * 100)
+}
+
+// 加载文件任务
+const loadFileTasks = async () => {
+  loading.value = true
+  try {
+    const params = { limit: 50, offset: 0 }
+    if (fileTaskStatusFilter.value) {
+      params.status = fileTaskStatusFilter.value
+    }
+    const tasks = await getFileTasks(params)
+    fileTaskList.value = tasks || []
+  } catch (error) {
+    console.error('加载文件任务失败:', error)
+    ElMessage.error('加载文件任务失败')
+  } finally {
+    loading.value = false
+  }
+}
+
+// 加载路径列表
+const loadPaths = async () => {
+  try {
+    const paths = await getScanPaths()
+    pathList.value = paths || []
+  } catch (error) {
+    console.error('加载扫描路径失败:', error)
+  }
+}
+
+// 文件任务选择变化
+const handleFileTaskSelectionChange = (selection) => {
+  selectedFileTasks.value = selection
+}
+
+// 立即扫描
+const handleScan = async () => {
+  if (pathList.value.length === 0) {
+    ElMessage.info('尚未配置扫描路径，请先添加扫描路径')
+    handleAddPath()
+    return
+  }
+
+  const enabledPaths = pathList.value.filter(p => p.enabled)
+  if (enabledPaths.length === 0) {
+    ElMessage.warning('没有启用的扫描路径，请先启用扫描路径或添加新路径')
+    handleAddPath()
+    return
+  }
+
   scanDialogVisible.value = true
-  // 默认选择第一个启用的路径
   const enabledPath = pathList.value.find(p => p.enabled)
   if (enabledPath) {
-    scanForm.selectedPathId = enabledPath.id
-    scanForm.scanType = 'path'
+    scanForm.selected_path_id = enabledPath.id
+    scanForm.scan_type = 'path'
   }
 }
 
@@ -640,19 +596,11 @@ const executeScan = async () => {
   try {
     let scanData = {}
 
-    if (scanForm.scanType === 'path' && scanForm.selectedPathId) {
-      // 使用已配置的扫描路径
-      const selectedPath = pathList.value.find(p => p.id === scanForm.selectedPathId)
+    if (scanForm.scan_type === 'path' && scanForm.selected_path_id) {
+      const selectedPath = pathList.value.find(p => p.id === scanForm.selected_path_id)
       if (!selectedPath) {
         ElMessage.warning('请选择扫描路径')
         return
-      }
-
-      scanData = {
-        path_id: selectedPath.id,
-        // 使用路径的独立配置，不覆盖
-        // scan_type: 'incremental', // 使用路径配置的扫描类型
-        // recursive: selectedPath.recursive // 使用路径配置的递归设置
       }
 
       await ElMessageBox.confirm(
@@ -667,18 +615,17 @@ const executeScan = async () => {
           type: 'info'
         }
       )
-    } else if (scanForm.scanType === 'custom' && scanForm.customPath) {
-      // 使用自定义路径
-      scanData = {
-        path: scanForm.customPath,
-        recursive: scanForm.customRecursive,
-        scan_type: scanForm.customScanType
-      }
 
+      // 使用路径配置的扫描策略
+      scanData = {
+        path: selectedPath.path,
+        use_default_strategy: true
+      }
+    } else if (scanForm.scan_type === 'custom' && scanForm.path) {
       await ElMessageBox.confirm(
-        `确定要扫描自定义路径 "${scanForm.customPath}" 吗？\n\n` +
-        `扫描类型: ${scanForm.customScanType === 'full' ? '全量' : '增量'}\n` +
-        `递归扫描: ${scanForm.customRecursive ? '是' : '否'}`,
+        `确定要扫描自定义路径 "${scanForm.path}" 吗？\n\n` +
+        `扫描类型: ${scanForm.scan_type_value === 'full' ? '全量' : '增量'}\n` +
+        `递归扫描: ${scanForm.scan_type_value === 'full' ? '是' : '否'}`,
         '自定义扫描确认',
         {
           confirmButtonText: '确定',
@@ -686,22 +633,22 @@ const executeScan = async () => {
           type: 'info'
         }
       )
+
+      scanData = {
+        path: scanForm.path,
+        use_default_strategy: scanForm.use_default_strategy,
+        scan_type: scanForm.scan_type_value,
+        recursive: scanForm.recursive,
+        skip_strategy: scanForm.skip_strategy
+      }
     } else {
       ElMessage.warning('请选择扫描路径或输入自定义路径')
       return
     }
 
-    // 调用API创建扫描任务
-    const { createScanTask } = await import('@/api/scan')
     const result = await createScanTask(scanData)
-
-    // 连接WebSocket监听进度
-    connectScanProgress(result.task_id)
-
     ElMessage.success('扫描任务已启动')
-    loadTasks()
-
-    // 关闭对话框
+    loadFileTasks()
     scanDialogVisible.value = false
   } catch (error) {
     if (error !== 'cancel') {
@@ -711,89 +658,161 @@ const executeScan = async () => {
   }
 }
 
-// 选择扫描路径
-const handleSelectPath = () => {
-  pathDialogVisible.value = true
-}
-
-// 扫描配置
-const handleConfig = () => {
-  ElMessage.info('扫描配置功能开发中')
-}
-
-// 查看任务详情
-const handleView = async (row) => {
+// 查看文件任务详情
+const handleViewFileTask = async (row) => {
   try {
-    const { getScanTask } = await import('@/api/scan')
-    const detail = await getScanTask(row.id)
-    
-    ElMessageBox.alert(
-      `<div style="text-align: left;">
-        <p><strong>任务ID:</strong> ${detail.id}</p>
-        <p><strong>批次ID:</strong> ${detail.batch_id}</p>
-        <p><strong>扫描路径:</strong> ${detail.target_path}</p>
-        <p><strong>扫描类型:</strong> ${detail.scan_type === 'full' ? '全量' : '增量'}</p>
-        <p><strong>递归扫描:</strong> ${detail.recursive ? '是' : '否'}</p>
-        <p><strong>文件总数:</strong> ${detail.total_files}</p>
-        <p><strong>新增文件:</strong> ${detail.new_files}</p>
-        <p><strong>更新文件:</strong> ${detail.updated_files}</p>
-        <p><strong>跳过文件:</strong> ${detail.skipped_files}</p>
-        <p><strong>失败文件:</strong> ${detail.failed_files}</p>
-        <p><strong>耗时:</strong> ${detail.duration_seconds}秒</p>
-        <p><strong>开始时间:</strong> ${detail.started_at}</p>
-        <p><strong>完成时间:</strong> ${detail.completed_at || '进行中'}</p>
-        ${detail.error_message ? `<p><strong>错误信息:</strong> ${detail.error_message}</p>` : ''}
-      </div>`,
-      '任务详情',
-      {
-        dangerouslyUseHTMLString: true,
-        confirmButtonText: '关闭'
-      }
-    )
+    const detail = await getScanResult(row.id)
+    scanResultDetail.value = detail
+    scanResultDialogVisible.value = true
   } catch (error) {
-    console.error('获取任务详情失败:', error)
-    ElMessage.error('获取任务详情失败')
+    console.error('获取文件扫描结果失败:', error)
+    ElMessage.error('获取文件扫描结果失败')
   }
 }
 
-// 停止扫描
-const handleStop = async (row) => {
+// 重新扫描文件
+const handleRescanFile = async (row) => {
   try {
-    await ElMessageBox.confirm('确定要停止这个扫描任务吗？', '提示', {
+    await ElMessageBox.confirm('确定要重新扫描这个文件吗？\n系统将自动删除该文件的所有扫描记录并重新建立扫描任务。', '提示', {
       confirmButtonText: '确定',
       cancelButtonText: '取消',
       type: 'warning'
     })
-
-    // 调用实际API停止扫描任务
-    const { stopScanTask } = await import('@/api/scan')
-    await stopScanTask(row.id)
-
-    ElMessage.success('扫描任务已停止')
-    loadTasks()
+    await rescanFile(row.id)
+    ElMessage.success('重新扫描任务已创建')
+    loadFileTasks()
   } catch (error) {
     if (error !== 'cancel') {
-      console.error('停止扫描失败:', error)
-      ElMessage.error('停止扫描失败')
+      console.error('重新扫描失败:', error)
+      ElMessage.error('重新扫描失败')
     }
   }
 }
 
-// 处理选择变化
-const handleSelectionChange = (selection) => {
-  selectedTasks.value = selection
+// 停止文件扫描
+const handleStopFileScan = async (row) => {
+  try {
+    await ElMessageBox.confirm('确定要停止这个文件的扫描吗？\n停止后将自动删除该文件的所有扫描记录。', '提示', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning'
+    })
+    await stopFileScan(row.id)
+    ElMessage.success('文件扫描已停止')
+    loadFileTasks()
+  } catch (error) {
+    if (error !== 'cancel') {
+      console.error('停止文件扫描失败:', error)
+      ElMessage.error('停止文件扫描失败')
+    }
+  }
 }
 
-// 批量停止任务
-const handleBatchStop = async () => {
-  if (selectedTasks.value.length === 0) {
-    ElMessage.warning('请先选择要停止的任务')
+// 删除文件扫描结果
+const handleDeleteFileScanResult = async (row) => {
+  try {
+    await ElMessageBox.confirm('确定要删除这个文件的扫描结果吗？此操作不可恢复！', '警告', {
+      confirmButtonText: '确定删除',
+      cancelButtonText: '取消',
+      type: 'warning'
+    })
+    await deleteScanResult(row.id)
+    ElMessage.success('扫描结果已删除')
+    loadFileTasks()
+  } catch (error) {
+    if (error !== 'cancel') {
+      console.error('删除扫描结果失败:', error)
+      ElMessage.error('删除扫描结果失败')
+    }
+  }
+}
+
+// 批量重新扫描文件
+const handleBatchRescanFiles = async () => {
+  if (selectedFileTasks.value.length === 0) {
+    ElMessage.warning('请先选择要重新扫描的文件')
     return
   }
 
   try {
     await ElMessageBox.confirm(
-      `确定要停止选中的 ${selectedTasks.value.length} 个扫描任务吗？`,
+      `确定要重新扫描选中的 ${selectedFileTasks.value.length} 个文件吗？\n系统将自动删除这些文件的所有扫描记录并重新建立扫描任务。`,
+      '批量重新扫描确认',
+      {
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }
+    )
+
+    // 提取media_file_id
+    const mediaFileIds = selectedFileTasks.value
+      .map(t => t.media_file_id)
+      .filter(id => id !== undefined && id !== null && !isNaN(id))
+      .map(id => parseInt(id, 10))
+
+    console.log('选中的文件任务:', selectedFileTasks.value)
+    console.log('提取的media_file_ids:', mediaFileIds)
+    
+    if (mediaFileIds.length === 0) {
+      ElMessage.error('没有有效的文件ID，无法执行批量重新扫描')
+      return
+    }
+
+    console.log('发送批量重新扫描请求...')
+    const result = await batchRescanMediaFiles(mediaFileIds)
+    console.log('批量重新扫描结果:', result)
+    
+    ElMessage.success(`批量重新扫描完成：成功 ${result.success} 个，失败 ${result.failed} 个`)
+    selectedFileTasks.value = []
+    loadFileTasks()
+  } catch (error) {
+    if (error !== 'cancel') {
+    console.error('批量重新扫描失败:', error)
+    console.error('错误响应:', error.response)
+    console.error('错误数据:', error.response?.data)
+    console.error('Detail内容:', error.response?.data?.detail)
+    
+    // 尝试解析详细错误信息
+    let errorMsg = '批量重新扫描失败'
+    if (error.response?.data) {
+      if (error.response.data.detail) {
+        // detail可能是数组或字符串
+        if (Array.isArray(error.response.data.detail)) {
+          // 如果是数组，提取第一条错误信息
+          const firstError = error.response.data.detail[0]
+          if (typeof firstError === 'string') {
+            errorMsg += `: ${firstError}`
+          } else if (firstError && firstError.msg) {
+            errorMsg += `: ${firstError.msg}`
+          } else {
+            errorMsg += `: ${JSON.stringify(error.response.data.detail)}`
+          }
+        } else {
+          errorMsg += `: ${error.response.data.detail}`
+        }
+      } else {
+        errorMsg += `: ${JSON.stringify(error.response.data)}`
+      }
+    } else if (error.message) {
+      errorMsg += `: ${error.message}`
+    }
+    
+    ElMessage.error(errorMsg)
+    }
+  }
+}
+
+// 批量停止文件扫描
+const handleBatchStopFileScans = async () => {
+  if (selectedFileTasks.value.length === 0) {
+    ElMessage.warning('请先选择要停止的文件')
+    return
+  }
+
+  try {
+    await ElMessageBox.confirm(
+      `确定要停止选中的 ${selectedFileTasks.value.length} 个文件的扫描吗？\n停止后将自动删除这些文件的所有扫描记录。`,
       '批量停止确认',
       {
         confirmButtonText: '确定',
@@ -802,41 +821,46 @@ const handleBatchStop = async () => {
       }
     )
 
-    const { batchStopTasks } = await import('@/api/scan')
-    const result = await batchStopTasks(selectedTasks.value.map(t => t.id))
+    // 提取media_file_id
+    const mediaFileIds = selectedFileTasks.value
+      .map(t => t.media_file_id)
+      .filter(id => id !== undefined && id !== null && !isNaN(id))
+      .map(id => parseInt(id, 10))
 
-    ElMessage.success(
-      `批量停止完成：成功 ${result.success} 个，失败 ${result.failed} 个`
-    )
-    
-    // 清空选择
-    selectedTasks.value = []
-    loadTasks()
+    if (mediaFileIds.length === 0) {
+      ElMessage.error('没有有效的文件ID')
+      return
+    }
+
+    const result = await batchStopMediaFileScans(mediaFileIds)
+    ElMessage.success(`批量停止完成：成功 ${result.success} 个，失败 ${result.failed} 个`)
+    selectedFileTasks.value = []
+    loadFileTasks()
   } catch (error) {
     if (error !== 'cancel') {
-      console.error('批量停止任务失败:', error)
-      ElMessage.error('批量停止任务失败')
+      console.error('批量停止失败:', error)
+      ElMessage.error('批量停止失败')
     }
   }
 }
 
-// 批量删除任务
-const handleBatchDelete = async () => {
-  if (selectedTasks.value.length === 0) {
-    ElMessage.warning('请先选择要删除的任务')
+// 批量删除扫描结果
+const handleBatchDeleteFileScanResults = async () => {
+  if (selectedFileTasks.value.length === 0) {
+    ElMessage.warning('请先选择要删除的文件')
     return
   }
 
-  // 检查是否有正在运行的任务
-  const runningTasks = selectedTasks.value.filter(t => t.status === 'running')
-  if (runningTasks.length > 0) {
-    ElMessage.warning('选中的任务中有正在运行的任务，无法删除')
+  // 检查是否有未完成的文件
+  const uncompletedTasks = selectedFileTasks.value.filter(t => t.status !== 'scanned')
+  if (uncompletedTasks.length > 0) {
+    ElMessage.warning('选中的文件中有未完成扫描的文件，无法删除')
     return
   }
 
   try {
     await ElMessageBox.confirm(
-      `确定要删除选中的 ${selectedTasks.value.length} 个扫描任务吗？此操作不可恢复！`,
+      `确定要删除选中的 ${selectedFileTasks.value.length} 个文件的扫描结果吗？此操作不可恢复！`,
       '批量删除确认',
       {
         confirmButtonText: '确定删除',
@@ -845,155 +869,170 @@ const handleBatchDelete = async () => {
       }
     )
 
-    const { batchDeleteTasks } = await import('@/api/scan')
-    const result = await batchDeleteTasks(selectedTasks.value.map(t => t.id))
+    // 提取media_file_id
+    const mediaFileIds = selectedFileTasks.value
+      .map(t => t.media_file_id)
+      .filter(id => id !== undefined && id !== null && !isNaN(id))
+      .map(id => parseInt(id, 10))
 
-    ElMessage.success(
-      `批量删除完成：成功 ${result.success} 个，失败 ${result.failed} 个`
-    )
-    
-    // 清空选择
-    selectedTasks.value = []
-    loadTasks()
+    if (mediaFileIds.length === 0) {
+      ElMessage.error('没有有效的文件ID')
+      return
+    }
+
+    const result = await batchDeleteMediaFileScanResults(mediaFileIds)
+    ElMessage.success(`批量删除完成：成功 ${result.success} 个，失败 ${result.failed} 个`)
+    selectedFileTasks.value = []
+    loadFileTasks()
   } catch (error) {
     if (error !== 'cancel') {
-      console.error('批量删除任务失败:', error)
-      ElMessage.error('批量删除任务失败')
+      console.error('批量删除失败:', error)
+      ElMessage.error('批量删除失败')
     }
   }
 }
 
-// 删除扫描任务
-const handleDelete = async (row) => {
-  try {
-    await ElMessageBox.confirm('确定要删除这个扫描任务吗？此操作不可恢复！', '警告', {
-      confirmButtonText: '确定删除',
-      cancelButtonText: '取消',
-      type: 'warning'
-    })
-
-    const { deleteScanTask } = await import('@/api/scan')
-    await deleteScanTask(row.id)
-
-    ElMessage.success('扫描任务已删除')
-    loadTasks()
-  } catch (error) {
-    if (error !== 'cancel') {
-      console.error('删除扫描任务失败:', error)
-      ElMessage.error('删除扫描任务失败')
-    }
-  }
+// 扫描路径相关
+const handleSelectPath = () => {
+  pathDialogVisible.value = true
 }
 
-// 重新扫描
-const handleRescan = async (row) => {
-  try {
-    await ElMessageBox.confirm(`确定要重新扫描路径 ${row.targetPath} 吗？`, '提示', {
-      confirmButtonText: '确定',
-      cancelButtonText: '取消',
-      type: 'info'
-    })
-
-    const { retryScanTask } = await import('@/api/scan')
-    const result = await retryScanTask(row.id)
-
-    // 连接WebSocket监听进度
-    connectScanProgress(result.task_id)
-
-    ElMessage.success('重新扫描任务已启动')
-    loadTasks()
-  } catch (error) {
-    if (error !== 'cancel') {
-      console.error('重新扫描失败:', error)
-      const errorMessage = error.response?.data?.detail || error.message || '重新扫描失败'
-      ElMessage.error(errorMessage)
-    }
-  }
-}
-
-// 重试扫描
-const handleRetry = async (row) => {
-  try {
-    await ElMessageBox.confirm('确定要重试这个扫描任务吗？', '提示', {
-      confirmButtonText: '确定',
-      cancelButtonText: '取消',
-      type: 'info'
-    })
-
-    // 调用实际API重试扫描任务
-    const { retryScanTask } = await import('@/api/scan')
-    await retryScanTask(row.id)
-
-    ElMessage.success('扫描任务已重新创建')
-    loadTasks()
-  } catch (error) {
-    if (error !== 'cancel') {
-      console.error('重试扫描失败:', error)
-      // 提供更详细的错误信息
-      const errorMsg = error.response?.data?.detail || error.message || '重试扫描失败'
-      ElMessage.error(errorMsg)
-    }
-  }
-}
-
-// 添加路径
 const handleAddPath = () => {
   editingPathId.value = null
   Object.assign(pathForm, {
-    pathName: '',
+    path_name: '',
     path: '',
-    scanType: 'incremental',
+    scan_type: 'incremental',
     recursive: true,
-    monitoringEnabled: true,
-    monitoringDebounce: 5,
-    ignorePatterns: '',
+    skip_strategy: 'keyword',
+    scan_subdirectories: true,
+    scan_debounce_time: 30,
+    monitoring_enabled: false,
+    monitoring_mode: 'watchdog',
+    monitoring_debounce: 5,
+    auto_recognize: false,
+    auto_organize: false,
     enabled: true
   })
   pathDialogVisible.value = true
 }
 
-// 编辑路径
 const handleEditPath = (row) => {
   editingPathId.value = row.id
   Object.assign(pathForm, {
-    pathName: row.path_name || '',
+    path_name: row.path_name || '',
     path: row.path,
-    scanType: row.scan_type || 'incremental',
+    scan_type: row.scan_type || 'incremental',
     recursive: row.recursive,
-    monitoringEnabled: row.monitoring_enabled,
-    monitoringDebounce: row.monitoring_debounce || 5,
-    ignorePatterns: Array.isArray(row.ignore_patterns) ? row.ignore_patterns.join('\n') : '',
+    skip_strategy: row.skip_strategy || 'keyword',
+    scan_subdirectories: row.scan_subdirectories !== undefined ? row.scan_subdirectories : true,
+    scan_debounce_time: row.scan_debounce_time || 30,
+    monitoring_enabled: row.monitoring_enabled,
+    monitoring_mode: row.monitoring_mode,
+    monitoring_debounce: row.monitoring_debounce,
+    auto_recognize: row.auto_recognize,
+    auto_organize: row.auto_organize,
     enabled: row.enabled
   })
   pathDialogVisible.value = true
 }
 
-// 删除路径
 const handleDeletePath = async (row) => {
   try {
     await ElMessageBox.confirm('确定要删除这个扫描路径吗？', '提示', {
       confirmButtonText: '确定',
       cancelButtonText: '取消',
       type: 'warning'
-    }).then(async () => {
-      // 调用实际API删除路径
-      const { deleteScanPath } = await import('@/api/scan')
-      await deleteScanPath(row.id)
-
-      // 从列表中移除
-      const index = pathList.value.findIndex(item => item.id === row.id)
-      if (index > -1) {
-        pathList.value.splice(index, 1)
-        ElMessage.success('删除成功')
-      }
-    }).catch(() => {})
+    })
+    await deleteScanPath(row.id)
+    ElMessage.success('删除成功')
+    loadPaths()
   } catch (error) {
-    console.error('删除路径失败:', error)
-    ElMessage.error('删除路径失败')
+    if (error !== 'cancel') {
+      console.error('删除路径失败:', error)
+      ElMessage.error('删除路径失败')
+    }
   }
 }
 
-// 浏览路径
+const handleSavePath = async () => {
+  if (!pathForm.path_name || pathForm.path_name.trim() === '') {
+    ElMessage.error('路径名称不能为空')
+    return
+  }
+
+  if (pathForm.path_name.length > 100) {
+    ElMessage.error('路径名称不能超过100个字符')
+    return
+  }
+
+  if (!pathForm.path || pathForm.path.trim() === '') {
+    ElMessage.error('路径不能为空')
+    return
+  }
+
+  if (pathForm.path.length > 260) {
+    ElMessage.error('路径长度不能超过260个字符')
+    return
+  }
+
+  try {
+    if (editingPathId.value) {
+      await updateScanPath(editingPathId.value, pathForm)
+      ElMessage.success('更新成功')
+    } else {
+      await addScanPath(pathForm)
+      ElMessage.success('添加成功')
+    }
+    loadPaths()
+    pathDialogVisible.value = false
+  } catch (error) {
+    console.error('保存路径失败:', error)
+    ElMessage.error(error.response?.data?.detail || '保存路径失败')
+  }
+}
+
+// 扫描配置相关
+const handleConfig = async () => {
+  try {
+    const config = await getDefaultScanConfig()
+    Object.assign(configForm, config)
+    configDialogVisible.value = true
+  } catch (error) {
+    console.error('加载扫描配置失败:', error)
+    ElMessage.error('加载扫描配置失败')
+  }
+}
+
+const saveConfig = async () => {
+  try {
+    await updateDefaultScanConfig(configForm)
+    ElMessage.success('扫描配置已保存')
+    configDialogVisible.value = false
+  } catch (error) {
+    console.error('保存扫描配置失败:', error)
+    ElMessage.error('保存扫描配置失败')
+  }
+}
+
+const resetConfig = async () => {
+  try {
+    await resetDefaultScanConfig()
+    Object.assign(configForm, {
+      default_scan_type: 'incremental',
+      default_recursive: true,
+      default_skip_strategy: 'keyword',
+      scan_subdirectories: true,
+      default_monitor_debounce_time: 30
+    })
+    ElMessage.info('扫描配置已重置为默认值')
+  } catch (error) {
+    console.error('重置扫描配置失败:', error)
+    ElMessage.error('重置扫描配置失败')
+  }
+}
+
+// 目录浏览相关
 const handleBrowsePath = () => {
   browseTarget.value = 'path'
   currentBrowsePath.value = ''
@@ -1001,7 +1040,6 @@ const handleBrowsePath = () => {
   loadDirectory('')
 }
 
-// 浏览自定义路径
 const handleBrowseCustomPath = () => {
   browseTarget.value = 'custom'
   currentBrowsePath.value = ''
@@ -1009,12 +1047,10 @@ const handleBrowseCustomPath = () => {
   loadDirectory('')
 }
 
-// 加载目录内容
 const loadDirectory = async (path) => {
   try {
-    const { browseDirectory } = await import('@/api/scan')
     const items = await browseDirectory(path)
-    directoryItems.value = items
+    directoryItems.value = items || []
     currentBrowsePath.value = path
   } catch (error) {
     console.error('加载目录失败:', error)
@@ -1022,14 +1058,12 @@ const loadDirectory = async (path) => {
   }
 }
 
-// 进入目录
 const enterDirectory = (item) => {
   if (item.is_dir) {
     loadDirectory(item.path)
   }
 }
 
-// 双击行处理
 const handleRowDblClick = (row) => {
   if (row.is_dir) {
     enterDirectory(row)
@@ -1038,14 +1072,11 @@ const handleRowDblClick = (row) => {
   }
 }
 
-// 返回上级目录
 const goUp = () => {
   if (!currentBrowsePath.value) return
-
   const path = currentBrowsePath.value
   const separator = path.includes('\\') ? '\\' : '/'
   const parts = path.split(separator)
-
   if (parts.length > 1) {
     parts.pop()
     const parentPath = parts.join(separator)
@@ -1055,22 +1086,19 @@ const goUp = () => {
   }
 }
 
-// 刷新目录
 const refreshDirectory = () => {
   loadDirectory(currentBrowsePath.value)
 }
 
-// 选择路径
 const selectPath = (path) => {
   if (browseTarget.value === 'path') {
     pathForm.path = path
   } else if (browseTarget.value === 'custom') {
-    scanForm.customPath = path
+    scanForm.path = path
   }
   browseDialogVisible.value = false
 }
 
-// 选择当前目录
 const selectCurrentPath = () => {
   if (currentBrowsePath.value) {
     selectPath(currentBrowsePath.value)
@@ -1079,31 +1107,22 @@ const selectCurrentPath = () => {
   }
 }
 
-// 获取路径分段
 const pathSegments = computed(() => {
   if (!currentBrowsePath.value) return []
-
   const path = currentBrowsePath.value
   const separator = path.includes('\\') ? '\\' : '/'
   const parts = path.split(separator)
-
-  // 添加根目录
   const segments = [parts[0]]
-
-  // 添加其他分段
   for (let i = 1; i < parts.length; i++) {
     segments.push(parts[i])
   }
-
   return segments
 })
 
-// 导航到指定路径
 const navigateToPath = (path) => {
   loadDirectory(path)
 }
 
-// 获取到指定索引的路径
 const getPathUpTo = (index) => {
   const path = currentBrowsePath.value
   const separator = path.includes('\\') ? '\\' : '/'
@@ -1111,139 +1130,26 @@ const getPathUpTo = (index) => {
   return parts.slice(0, index + 1).join(separator)
 }
 
-// 格式化文件大小
-const formatFileSize = (bytes) => {
-  if (!bytes) return '0 B'
-
-  const k = 1024
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB']
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
-
-  return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + ' ' + sizes[i]
-}
-
-// 保存路径
-const handleSavePath = async () => {
-  // 验证路径名称
-  const nameError = validatePathName(pathForm.pathName)
-  if (nameError) {
-    ElMessage.error(nameError)
-    return
-  }
-
-  // 验证路径
-  const pathError = validatePath(pathForm.path)
-  if (pathError) {
-    ElMessage.error(pathError)
-    return
-  }
-
-  try {
-    const { addScanPath, updateScanPath, getScanPaths } = await import('@/api/scan')
-    
-    // 检查是新增还是编辑
-    if (editingPathId.value) {
-      // 更新现有路径
-      await updateScanPath(editingPathId.value, {
-        path: pathForm.path,
-        recursive: pathForm.recursive,
-        enabled: pathForm.enabled
-      })
-      ElMessage.success('更新成功')
-    } else {
-      // 添加新路径
-      await addScanPath({
-        path: pathForm.path,
-        recursive: pathForm.recursive,
-        enabled: pathForm.enabled
-      })
-      ElMessage.success('添加成功')
-    }
-    
-    // 重新加载路径列表
-    const paths = await getScanPaths()
-    pathList.value = paths.map(p => ({
-      id: p.id,
-      path: p.path,
-      recursive: p.recursive,
-      enabled: p.enabled,
-      lastScanAt: p.last_scan_at
-    }))
-    
-    pathDialogVisible.value = false
-  } catch (error) {
-    console.error('保存路径失败:', error)
-    ElMessage.error(error.response?.data?.detail || '保存路径失败')
-  }
-}
-
-// 连接WebSocket监听扫描进度
-const connectScanProgress = (taskId) => {
-  // 如果已存在连接，先关闭
-  if (wsConnections.has(taskId)) {
-    wsConnections.get(taskId).close()
-  }
-
-  // 创建新的WebSocket连接
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-  const wsUrl = `${protocol}//${window.location.host}/api/ws/scan/${taskId}`
-  const ws = new WebSocketClient(wsUrl)
-
-  // 监听消息
-  ws.on('message', (data) => {
-    console.log('收到扫描进度:', data)
-    scanProgress.set(taskId, data)
-
-    // 更新任务列表中的进度
-    const task = taskList.value.find(t => t.id === taskId)
-    if (task) {
-      task.progress = data.progress
-      task.scannedFiles = data.scanned_files
-      task.totalFiles = data.total_files
-      task.currentFile = data.current_file
-      task.status = data.status
-    }
-  })
-
-  // 监听连接状态
-  ws.on('connected', () => {
-    console.log(`扫描任务 ${taskId} WebSocket连接成功`)
-  })
-
-  ws.on('disconnected', () => {
-    console.log(`扫描任务 ${taskId} WebSocket断开连接`)
-  })
-
-  // 存储连接
-  wsConnections.set(taskId, ws)
-}
-
-// 断开WebSocket连接
-const disconnectScanProgress = (taskId) => {
-  if (wsConnections.has(taskId)) {
-    wsConnections.get(taskId).close()
-    wsConnections.delete(taskId)
-  }
-  if (scanProgress.has(taskId)) {
-    scanProgress.delete(taskId)
-  }
-}
-
 // 初始化
-loadTasks()
 loadPaths()
+loadFileTasks()
 
-// 定时刷新任务列表（每5秒）
+// 定时刷新
 const refreshInterval = setInterval(() => {
-  loadTasks()
+  if (activeTab.value === 'fileTasks') {
+    // 只有当有正在扫描或等待中的任务时才自动刷新
+    const hasActiveTasks = fileTaskList.value.some(
+      task => task.status === 'scanning' || task.status === 'pending'
+    )
+    if (hasActiveTasks) {
+      loadFileTasks()
+    }
+  }
 }, 5000)
 
 // 组件卸载时清理
 onUnmounted(() => {
   clearInterval(refreshInterval)
-  wsConnections.forEach(ws => ws.close())
-  wsConnections.clear()
-  scanProgress.clear()
 })
 </script>
 
@@ -1258,7 +1164,12 @@ onUnmounted(() => {
     }
   }
 
+  .scan-tabs {
+    margin-bottom: 16px;
+  }
+
   .task-card,
+  .file-task-card,
   .path-card {
     margin-bottom: 16px;
 
@@ -1271,6 +1182,12 @@ onUnmounted(() => {
         font-size: 16px;
         font-weight: 500;
       }
+    }
+  }
+
+  .scan-result-detail {
+    .el-descriptions {
+      margin-top: 20px;
     }
   }
 
@@ -1305,5 +1222,3 @@ onUnmounted(() => {
   }
 }
 </style>
-
-

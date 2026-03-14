@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 FastAPI 服务器
 """
@@ -8,7 +9,7 @@ from contextlib import asynccontextmanager
 from loguru import logger
 
 from app.core.config import config_manager
-from app.api import process, config as config_api, media, scan, recognition, organize, statistics, websocket, browse
+from app.api import process, config as config_api, media, scan, recognition, organize, statistics, websocket, browse, file_tasks
 
 
 @asynccontextmanager
@@ -51,6 +52,7 @@ def create_app() -> FastAPI:
     app.include_router(statistics.router, prefix="/api/statistics", tags=["统计管理"])
     app.include_router(websocket.router, prefix="/api", tags=["WebSocket"])
     app.include_router(browse.router, prefix="/api", tags=["浏览管理"])
+    app.include_router(file_tasks.router, prefix="/api", tags=["文件任务管理"])
 
     # 健康检查
     @app.get("/health")

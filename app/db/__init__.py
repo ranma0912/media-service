@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 数据库模块
 """
@@ -11,6 +12,7 @@ from app.core.config import config_manager
 db_config = config_manager.config.database
 
 # 创建数据库引擎
+# SQLite默认使用UTF-8编码，完全支持中文、日文、韩文及emoji等所有Unicode字符
 engine = create_engine(
     db_config.url,
     echo=db_config.echo,
